@@ -89,6 +89,27 @@ URL: https://www.bilibili.com/video/BV1xxxxx
 | 遇到 HTTP 200 但空数据就放弃 | 检查是否需要 Wbi 签名或 Cookie 鉴权 |
 | 完全依赖 `__INITIAL_STATE__` 拿所有数据 | `__INITIAL_STATE__` 只有首屏数据，深层数据要调 API |
 
+### ✅ 实战成功案例：5 分钟实现「关注列表」适配器
+
+以下是用上述工作流实际发现 Bilibili 关注列表 API 的完整过程：
+
+```
+1. browser_navigate → https://space.bilibili.com/{uid}/fans/follow
+2. browser_network_requests → 发现:
+   GET /x/relation/followings?vmid={uid}&pn=1&ps=24  →  [200]
+   GET /x/relation/stat?vmid={uid}                    →  [200]
+3. browser_evaluate → 验证 API:
+   fetch('/x/relation/followings?vmid=137702077&pn=1&ps=5', {credentials:'include'})
+   → { code: 0, data: { total: 1342, list: [{mid, uname, sign, ...}] } }
+4. 结论：标准 Cookie API，无需 Wbi 签名
+5. 写 following.ts → 一次构建通过 ✅
+```
+
+**关键决策点**：
+- 直接访问 `fans/follow` 页面（不是首页），页面加载就会触发 following API
+- 看到 URL 里没有 `/wbi/` → 不需要签名 → 直接用 `fetchJson` 而非 `apiGet`
+- API 返回 `code: 0` + 非空 `list` → Tier 2 Cookie 策略确认
+
 ---
 
 ## 核心流程
@@ -202,6 +223,45 @@ opencli cascade https://api.example.com/hot
 
 ---
 
+## Step 2.5: 准备工作（写代码之前）
+
+### 🎯 先找模板：从最相似的现有适配器开始
+
+**不要从零开始写**。先看看同站点已有哪些适配器：
+
+```bash
+ls src/clis/<site>/    # 看看已有什么
+cat src/clis/<site>/feed.ts   # 读最相似的那个
+```
+
+最高效的方式是 **复制最相似的适配器，然后改 3 个地方**：
+1. `name` → 新命令名
+2. API URL → 你在 Step 1 发现的端点
+3. 字段映射 → 对应新 API 的字段
+
+### 平台 SDK 速查表
+
+写 TS 适配器之前，先看看你的目标站点有没有**现成的 helper 函数**可以复用：
+
+#### Bilibili (`src/bilibili.ts`)
+
+| 函数 | 用途 | 何时使用 |
+|------|------|----------|
+| `fetchJson(page, url)` | 带 Cookie 的 fetch + JSON 解析 | 普通 Cookie-tier API |
+| `apiGet(page, path, {signed, params})` | 带 Wbi 签名的 API 调用 | URL 含 `/wbi/` 的接口 |
+| `getSelfUid(page)` | 获取当前登录用户的 UID | "我的xxx" 类命令 |
+| `resolveUid(page, input)` | 解析用户输入的 UID(支持数字/URL) | `--uid` 参数处理 |
+| `wbiSign(page, params)` | 底层 Wbi 签名生成 | 通常不直接用，`apiGet` 已封装 |
+| `stripHtml(s)` | 去除 HTML 标签 | 清理富文本字段 |
+
+**如何判断需不需要 `apiGet`**？看 Network 请求 URL：
+- 含 `/wbi/` 或 `w_rid=` → 必须用 `apiGet(..., { signed: true })`
+- 不含 → 直接用 `fetchJson`
+
+> 💡 其他站点（Twitter、小红书等）暂无专用 SDK，直接用 `page.evaluate` + `fetch` 即可。
+
+---
+
 ## Step 3: 编写适配器
 
 ### YAML vs TS？先看决策树
@@ -223,6 +283,27 @@ opencli cascade https://api.example.com/hot
 | GraphQL / 分页 / Wbi 签名 | TS | `bilibili/search.ts`, `twitter/search.ts` |
 
 > **经验法则**：如果你发现 YAML 里嵌了超过 10 行 JS，改用 TS 更可维护。
+
+### 通用模式：分页 API
+
+很多 API 使用 `pn`（页码）+ `ps`（每页数量）分页。标准处理模式：
+
+```typescript
+args: [
+  { name: 'page', type: 'int', required: false, default: 1, help: '页码' },
+  { name: 'limit', type: 'int', required: false, default: 50, help: '每页数量 (最大 50)' },
+],
+func: async (page, kwargs) => {
+  const pn = kwargs.page ?? 1;
+  const ps = Math.min(kwargs.limit ?? 50, 50); // 尊重 API 的 ps 上限
+  const payload = await fetchJson(page,
+    `https://api.example.com/list?pn=${pn}&ps=${ps}`
+  );
+  return payload.data?.list || [];
+},
+```
+
+> 💡 大多数站点的 `ps` 上限是 20~50。超过会被静默截断或返回错误。
 
 ### 方式 A: YAML Pipeline（声明式，推荐）
 
