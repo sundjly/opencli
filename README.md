@@ -139,7 +139,7 @@ npm install -g @jackwener/opencli@latest
 | **twitter** | `trending` `bookmarks` `profile` `search` `timeline` `following` `followers` `notifications` `post` `reply` `delete` `like` | 🔐 Browser |
 | **reddit** | `hot` `frontpage` `search` `subreddit` | 🔐 Browser |
 | **weibo** | `hot` | 🔐 Browser |
-| **boss** | `search` | 🔐 Browser |
+| **boss** | `search` `detail` | 🔐 Browser |
 | **coupang** | `search` `add-to-cart` | 🔐 Browser |
 | **youtube** | `search` | 🔐 Browser |
 | **yahoo-finance** | `quote` | 🔐 Browser |

@@ -81,7 +81,7 @@ cli({
     { name: 'page', type: 'int', default: 1, help: 'Page number' },
     { name: 'limit', type: 'int', default: 15, help: 'Number of results' },
   ],
-  columns: ['name', 'salary', 'company', 'area', 'experience', 'degree', 'skills', 'boss', 'url'],
+  columns: ['name', 'salary', 'company', 'area', 'experience', 'degree', 'skills', 'boss', 'security_id', 'url'],
   func: async (page: IPage | null, kwargs) => {
     if (!page) throw new Error('Browser page required');
 
@@ -191,6 +191,7 @@ cli({
           degree: j.jobDegree,
           skills: (j.skills || []).join(','),
           boss: j.bossName + ' · ' + j.bossTitle,
+          security_id: j.securityId || '',
           url: 'https://www.zhipin.com/job_detail/' + j.encryptJobId + '.html',
         });
         addedInBatch++;
