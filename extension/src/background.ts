@@ -7,7 +7,7 @@
 
 import type { Command, Result } from './protocol';
 import { DAEMON_WS_URL, WS_RECONNECT_BASE_DELAY, WS_RECONNECT_MAX_DELAY } from './protocol';
-import * as cdp from './cdp';
+import * as executor from './executor';
 
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -93,7 +93,7 @@ function initialize(): void {
   if (initialized) return;
   initialized = true;
   chrome.alarms.create('keepalive', { periodInMinutes: 0.4 }); // ~24 seconds
-  cdp.registerListeners();
+  executor.registerListeners();
   connect();
   console.log('[opencli] Browser Bridge extension initialized');
 }
@@ -173,7 +173,7 @@ async function handleExec(cmd: Command): Promise<Result> {
   if (!cmd.code) return { id: cmd.id, ok: false, error: 'Missing code' };
   const tabId = await resolveTabId(cmd.tabId);
   try {
-    const data = await cdp.evaluateAsync(tabId, cmd.code);
+    const data = await executor.evaluateAsync(tabId, cmd.code);
     return { id: cmd.id, ok: true, data };
   } catch (err) {
     return { id: cmd.id, ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -235,12 +235,12 @@ async function handleTabs(cmd: Command): Promise<Result> {
         const target = tabs[cmd.index];
         if (!target?.id) return { id: cmd.id, ok: false, error: `Tab index ${cmd.index} not found` };
         await chrome.tabs.remove(target.id);
-        cdp.detach(target.id);
+        executor.detach(target.id);
         return { id: cmd.id, ok: true, data: { closed: target.id } };
       }
       const tabId = await resolveTabId(cmd.tabId);
       await chrome.tabs.remove(tabId);
-      cdp.detach(tabId);
+      executor.detach(tabId);
       return { id: cmd.id, ok: true, data: { closed: tabId } };
     }
     case 'select': {
@@ -281,7 +281,7 @@ async function handleCookies(cmd: Command): Promise<Result> {
 async function handleScreenshot(cmd: Command): Promise<Result> {
   const tabId = await resolveTabId(cmd.tabId);
   try {
-    const data = await cdp.screenshot(tabId, {
+    const data = await executor.screenshot(tabId, {
       format: cmd.format,
       quality: cmd.quality,
       fullPage: cmd.fullPage,
