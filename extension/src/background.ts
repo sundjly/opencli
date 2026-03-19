@@ -85,6 +85,45 @@ function scheduleReconnect(): void {
   }, delay);
 }
 
+// ─── Automation window isolation ─────────────────────────────────────
+// All opencli operations happen in a dedicated Chrome window so the
+// user's active browsing session is never touched.
+
+let automationWindowId: number | null = null;
+
+/** Get or create the dedicated automation window. */
+async function getAutomationWindow(): Promise<number> {
+  // Check if our window is still alive
+  if (automationWindowId !== null) {
+    try {
+      await chrome.windows.get(automationWindowId);
+      return automationWindowId;
+    } catch {
+      // Window was closed by user
+      automationWindowId = null;
+    }
+  }
+
+  // Create a new window, not focused so it doesn't steal focus
+  const win = await chrome.windows.create({
+    focused: false,
+    width: 1280,
+    height: 900,
+    type: 'normal',
+  });
+  automationWindowId = win.id!;
+  console.log(`[opencli] Created automation window ${automationWindowId}`);
+  return automationWindowId;
+}
+
+// Clean up when the automation window is closed
+chrome.windows.onRemoved.addListener((windowId) => {
+  if (windowId === automationWindowId) {
+    console.log('[opencli] Automation window closed');
+    automationWindowId = null;
+  }
+});
+
 // ─── Lifecycle events ────────────────────────────────────────────────
 
 let initialized = false;
@@ -145,27 +184,28 @@ function isWebUrl(url?: string): boolean {
   return !url.startsWith('chrome://') && !url.startsWith('chrome-extension://');
 }
 
-/** Resolve target tab: use specified tabId or fall back to active web page tab */
+/**
+ * Resolve target tab in the automation window.
+ * If explicit tabId is given, use that directly.
+ * Otherwise, find or create a tab in the dedicated automation window.
+ */
 async function resolveTabId(tabId?: number): Promise<number> {
   if (tabId !== undefined) return tabId;
 
-  // Try the active tab first
-  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (activeTab?.id && isWebUrl(activeTab.url)) {
-    return activeTab.id;
-  }
+  // Get (or create) the automation window
+  const windowId = await getAutomationWindow();
 
-  // Active tab is not debuggable — try to find any open web page tab
-  const allTabs = await chrome.tabs.query({ currentWindow: true });
-  const webTab = allTabs.find(t => t.id && isWebUrl(t.url));
-  if (webTab?.id) {
-    await chrome.tabs.update(webTab.id, { active: true });
-    return webTab.id;
-  }
+  // Find the active tab in our automation window
+  const tabs = await chrome.tabs.query({ windowId });
+  const webTab = tabs.find(t => t.id && isWebUrl(t.url));
+  if (webTab?.id) return webTab.id;
 
-  // No web tabs at all — create one
-  const newTab = await chrome.tabs.create({ url: 'about:blank', active: true });
-  if (!newTab.id) throw new Error('Failed to create new tab');
+  // Use the first tab if it's a blank/new tab page
+  if (tabs.length > 0 && tabs[0]?.id) return tabs[0].id;
+
+  // No suitable tab — create one
+  const newTab = await chrome.tabs.create({ windowId, url: 'about:blank', active: true });
+  if (!newTab.id) throw new Error('Failed to create tab in automation window');
   return newTab.id;
 }
 
