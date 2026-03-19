@@ -8,59 +8,64 @@
  */
 
 /**
+ * Normalize JS code for evaluation:
+ * - Already an IIFE `(...)()` → send as-is
+ * - Arrow/function literal → wrap as IIFE `(code)()`
+ * - `new Promise(...)` or raw expression → send as-is
+ */
+function wrapForEval(js: string): string {
+  const code = js.trim();
+  if (!code) return 'undefined';
+
+  // Already an IIFE: `(async () => { ... })()` or `(function() {...})()`
+  if (/^\([\s\S]*\)\s*\(.*\)\s*$/.test(code)) return code;
+
+  // Arrow function: `() => ...` or `async () => ...`
+  if (/^(async\s+)?(\([^)]*\)|[A-Za-z_]\w*)\s*=>/.test(code)) return `(${code})()`;
+
+  // Function declaration: `function ...` or `async function ...`
+  if (/^(async\s+)?function[\s(]/.test(code)) return `(${code})()`;
+
+  // Everything else: bare expression, `new Promise(...)`, etc. → evaluate directly
+  return code;
+}
+
+/**
  * Evaluate a JS expression in the target tab's MAIN world.
  * Supports async expressions (await/Promise).
  */
 export async function evaluate(tabId: number, expression: string): Promise<unknown> {
-  // Wrap the expression so we can handle both sync and async results,
-  // and catch errors with proper serialization.
-  const wrappedCode = `
-    (async () => {
-      try {
-        const __result = await (async () => { return (${expression}); })();
-        return { __ok: true, __value: __result };
-      } catch (e) {
-        return { __ok: false, __error: e instanceof Error ? e.message : String(e), __stack: e instanceof Error ? e.stack : undefined };
-      }
-    })()
-  `;
+  // Normalize the expression: auto-invoke bare function expressions
+  const code = wrapForEval(expression.trim());
 
   let results;
   try {
     results = await chrome.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      func: (code: string) => {
-        // biome-ignore: eval is intentional — we need to run arbitrary JS in page context
-        return eval(code);
+      func: async (code: string) => {
+        // Use indirect eval (0, eval) to ensure global scope execution
+        return await (0, eval)(code);
       },
-      args: [wrappedCode],
+      args: [code],
     });
   } catch (err) {
-    // chrome.scripting can fail if the tab is a chrome:// page, etc.
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`executeScript failed: ${msg}`);
   }
 
   if (!results || results.length === 0) {
-    throw new Error('executeScript returned no results');
-  }
-
-  const result = results[0].result as
-    | { __ok: true; __value: unknown }
-    | { __ok: false; __error: string; __stack?: string }
-    | undefined;
-
-  if (!result) {
-    // Some expressions return undefined — that's fine
     return undefined;
   }
 
-  if (!result.__ok) {
-    throw new Error(result.__error || 'Eval error');
+  const frame = results[0];
+
+  // Check for execution error
+  if ('error' in frame) {
+    throw new Error((frame as any).error?.message || 'Script execution error');
   }
 
-  return result.__value;
+  return frame.result;
 }
 
 export const evaluateAsync = evaluate;

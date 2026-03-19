@@ -4,48 +4,44 @@ const DAEMON_WS_URL = `ws://${DAEMON_HOST}:${DAEMON_PORT}/ext`;
 const WS_RECONNECT_BASE_DELAY = 2e3;
 const WS_RECONNECT_MAX_DELAY = 6e4;
 
+function wrapForEval(js) {
+  const code = js.trim();
+  if (!code) return "undefined";
+  if (/^\([\s\S]*\)\s*\(.*\)\s*$/.test(code)) return code;
+  if (/^(async\s+)?(\([^)]*\)|[A-Za-z_]\w*)\s*=>/.test(code)) return `(${code})()`;
+  if (/^(async\s+)?function[\s(]/.test(code)) return `(${code})()`;
+  return code;
+}
 async function evaluate(tabId, expression) {
-  const wrappedCode = `
-    (async () => {
-      try {
-        const __result = await (async () => { return (${expression}); })();
-        return { __ok: true, __value: __result };
-      } catch (e) {
-        return { __ok: false, __error: e instanceof Error ? e.message : String(e), __stack: e instanceof Error ? e.stack : undefined };
-      }
-    })()
-  `;
+  const code = wrapForEval(expression.trim());
   let results;
   try {
     results = await chrome.scripting.executeScript({
       target: { tabId },
       world: "MAIN",
-      func: (code) => {
-        return eval(code);
+      func: async (code2) => {
+        return await (0, eval)(code2);
       },
-      args: [wrappedCode]
+      args: [code]
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`executeScript failed: ${msg}`);
   }
   if (!results || results.length === 0) {
-    throw new Error("executeScript returned no results");
-  }
-  const result = results[0].result;
-  if (!result) {
     return void 0;
   }
-  if (!result.__ok) {
-    throw new Error(result.__error || "Eval error");
+  const frame = results[0];
+  if ("error" in frame) {
+    throw new Error(frame.error?.message || "Script execution error");
   }
-  return result.__value;
+  return frame.result;
 }
 const evaluateAsync = evaluate;
-async function screenshot(tabId2, options = {}) {
-  const tab = await chrome.tabs.get(tabId2);
+async function screenshot(tabId, options = {}) {
+  const tab = await chrome.tabs.get(tabId);
   if (!tab.active) {
-    await chrome.tabs.update(tabId2, { active: true });
+    await chrome.tabs.update(tabId, { active: true });
     await new Promise((r) => setTimeout(r, 100));
   }
   const format = options.format ?? "png";
