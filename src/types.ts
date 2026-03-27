@@ -65,4 +65,5 @@ export interface IPage {
   installInterceptor(pattern: string): Promise<void>;
   getInterceptedRequests(): Promise<any[]>;
   screenshot(options?: ScreenshotOptions): Promise<string>;
+  closeWindow?(): Promise<void>;
 }

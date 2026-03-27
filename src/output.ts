@@ -16,7 +16,9 @@ export interface RenderOptions {
 }
 
 function normalizeRows(data: unknown): Record<string, unknown>[] {
-  return Array.isArray(data) ? data : [data as Record<string, unknown>];
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object') return [data as Record<string, unknown>];
+  return [{ value: data }];
 }
 
 function resolveColumns(rows: Record<string, unknown>[], opts: RenderOptions): string[] {

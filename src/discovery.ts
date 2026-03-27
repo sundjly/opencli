@@ -23,7 +23,7 @@ export const PLUGINS_DIR = path.join(os.homedir(), '.opencli', 'plugins');
 /** Matches files that register commands via cli() or lifecycle hooks */
 const PLUGIN_MODULE_PATTERN = /\b(?:cli|onStartup|onBeforeExecute|onAfterExecute)\s*\(/;
 
-import type { YamlCliDefinition } from './yaml-schema.js';
+import { type YamlCliDefinition, parseYamlArgs } from './yaml-schema.js';
 
 function parseStrategy(rawStrategy: string | undefined, fallback: Strategy = Strategy.COOKIE): Strategy {
   if (!rawStrategy) return fallback;
@@ -162,20 +162,7 @@ async function registerYamlCli(filePath: string, defaultSite: string): Promise<v
     const strategy = parseStrategy(strategyStr);
     const browser = cliDef.browser ?? (strategy !== Strategy.PUBLIC);
 
-    const args: Arg[] = [];
-    if (cliDef.args && typeof cliDef.args === 'object') {
-      for (const [argName, argDef] of Object.entries(cliDef.args)) {
-        args.push({
-          name: argName,
-          type: argDef?.type ?? 'str',
-          default: argDef?.default,
-          required: argDef?.required ?? false,
-          positional: argDef?.positional ?? false,
-          help: argDef?.description ?? argDef?.help ?? '',
-          choices: argDef?.choices,
-        });
-      }
-    }
+    const args = parseYamlArgs(cliDef.args);
 
     const cmd: CliCommand = {
       site,

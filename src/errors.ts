@@ -14,109 +14,61 @@ export class CliError extends Error {
 
   constructor(code: string, message: string, hint?: string) {
     super(message);
-    this.name = 'CliError';
+    this.name = new.target.name;
     this.code = code;
     this.hint = hint;
   }
 }
 
-// ── Browser / Connection ────────────────────────────────────────────────────
+export type BrowserConnectKind = 'daemon-not-running' | 'extension-not-connected' | 'command-failed' | 'unknown';
 
 export class BrowserConnectError extends CliError {
-  constructor(message: string, hint?: string) {
+  readonly kind: BrowserConnectKind;
+  constructor(message: string, hint?: string, kind: BrowserConnectKind = 'unknown') {
     super('BROWSER_CONNECT', message, hint);
-    this.name = 'BrowserConnectError';
+    this.kind = kind;
   }
 }
-
-// ── Adapter loading ─────────────────────────────────────────────────────────
 
 export class AdapterLoadError extends CliError {
-  constructor(message: string, hint?: string) {
-    super('ADAPTER_LOAD', message, hint);
-    this.name = 'AdapterLoadError';
-  }
+  constructor(message: string, hint?: string) { super('ADAPTER_LOAD', message, hint); }
 }
-
-// ── Command execution ───────────────────────────────────────────────────────
 
 export class CommandExecutionError extends CliError {
-  constructor(message: string, hint?: string) {
-    super('COMMAND_EXEC', message, hint);
-    this.name = 'CommandExecutionError';
-  }
+  constructor(message: string, hint?: string) { super('COMMAND_EXEC', message, hint); }
 }
-
-// ── Configuration ───────────────────────────────────────────────────────────
 
 export class ConfigError extends CliError {
-  constructor(message: string, hint?: string) {
-    super('CONFIG', message, hint);
-    this.name = 'ConfigError';
-  }
+  constructor(message: string, hint?: string) { super('CONFIG', message, hint); }
 }
-
-// ── Authentication / Login ──────────────────────────────────────────────────
 
 export class AuthRequiredError extends CliError {
   readonly domain: string;
-
   constructor(domain: string, message?: string) {
-    super(
-      'AUTH_REQUIRED',
-      message ?? `Not logged in to ${domain}`,
-      `Please open Chrome and log in to https://${domain}`,
-    );
-    this.name = 'AuthRequiredError';
+    super('AUTH_REQUIRED', message ?? `Not logged in to ${domain}`, `Please open Chrome and log in to https://${domain}`);
     this.domain = domain;
   }
 }
 
-// ── Timeout ─────────────────────────────────────────────────────────────────
-
 export class TimeoutError extends CliError {
   constructor(label: string, seconds: number) {
-    super(
-      'TIMEOUT',
-      `${label} timed out after ${seconds}s`,
-      'Try again, or increase timeout with OPENCLI_BROWSER_COMMAND_TIMEOUT env var',
-    );
-    this.name = 'TimeoutError';
+    super('TIMEOUT', `${label} timed out after ${seconds}s`, 'Try again, or increase timeout with OPENCLI_BROWSER_COMMAND_TIMEOUT env var');
   }
 }
-
-// ── Argument validation ─────────────────────────────────────────────────────
 
 export class ArgumentError extends CliError {
-  constructor(message: string, hint?: string) {
-    super('ARGUMENT', message, hint);
-    this.name = 'ArgumentError';
-  }
+  constructor(message: string, hint?: string) { super('ARGUMENT', message, hint); }
 }
-
-// ── Empty result ────────────────────────────────────────────────────────────
 
 export class EmptyResultError extends CliError {
   constructor(command: string, hint?: string) {
-    super(
-      'EMPTY_RESULT',
-      `${command} returned no data`,
-      hint ?? 'The page structure may have changed, or you may need to log in',
-    );
-    this.name = 'EmptyResultError';
+    super('EMPTY_RESULT', `${command} returned no data`, hint ?? 'The page structure may have changed, or you may need to log in');
   }
 }
 
-// ── Selector / DOM ──────────────────────────────────────────────────────────
-
 export class SelectorError extends CliError {
   constructor(selector: string, hint?: string) {
-    super(
-      'SELECTOR',
-      `Could not find element: ${selector}`,
-      hint ?? 'The page UI may have changed. Please report this issue.',
-    );
-    this.name = 'SelectorError';
+    super('SELECTOR', `Could not find element: ${selector}`, hint ?? 'The page UI may have changed. Please report this issue.');
   }
 }
 
@@ -129,10 +81,17 @@ export function getErrorMessage(error: unknown): string {
 
 /** Error code → emoji mapping for CLI output rendering. */
 export const ERROR_ICONS: Record<string, string> = {
-  AUTH_REQUIRED: '🔒',
+  AUTH_REQUIRED:   '🔒',
   BROWSER_CONNECT: '🔌',
-  TIMEOUT: '⏱ ',
-  ARGUMENT: '❌',
-  EMPTY_RESULT: '📭',
-  SELECTOR: '🔍',
+  TIMEOUT:         '⏱ ',
+  ARGUMENT:        '❌',
+  EMPTY_RESULT:    '📭',
+  SELECTOR:        '🔍',
+  COMMAND_EXEC:    '💥',
+  ADAPTER_LOAD:    '📦',
+  NETWORK:         '🌐',
+  API_ERROR:       '🚫',
+  RATE_LIMITED:    '⏳',
+  PAGE_CHANGED:    '🔄',
+  CONFIG:          '⚙️ ',
 };

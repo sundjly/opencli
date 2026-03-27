@@ -12,6 +12,7 @@ import { WebSocket, type RawData } from 'ws';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { BrowserCookie, IPage, ScreenshotOptions, SnapshotOptions, WaitOptions } from '../types.js';
+import type { IBrowserFactory } from '../runtime.js';
 import { wrapForEval } from './utils.js';
 import { generateSnapshotJs, scrollToRefJs, getFormStateJs } from './dom-snapshot.js';
 import { generateStealthJs } from './stealth.js';
@@ -47,7 +48,7 @@ interface RuntimeEvaluateResult {
 
 const CDP_SEND_TIMEOUT = 30_000;
 
-export class CDPBridge {
+export class CDPBridge implements IBrowserFactory {
   private _ws: WebSocket | null = null;
   private _idCounter = 0;
   private _pending = new Map<number, { resolve: (val: unknown) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
