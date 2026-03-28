@@ -54,24 +54,22 @@ There are many great browser automation tools. Here's when opencli is the right 
 npm install -g @jackwener/opencli
 ```
 
-Then use directly:
-
 ```bash
-opencli list                              # See all commands
-opencli hackernews top --limit 5          # Public API, no browser needed
-opencli bilibili hot --limit 5            # Browser command (requires Extension)
-opencli zhihu hot -f json                 # JSON output
+opencli list                           # See all commands
+opencli hackernews top --limit 5       # Public API, no browser needed
+opencli bilibili hot --limit 5         # Browser command (requires Extension)
 ```
 
 ### Install from source (for developers)
 
 ```bash
-git clone git@github.com:jackwener/opencli.git
-cd opencli
-npm install
-npm run build
-npm link      # Link binary globally
-opencli list  # Now you can use it anywhere!
+git clone git@github.com:jackwener/opencli.git && cd opencli && npm install && npm run build && npm link
+```
+
+### Verify setup
+
+```bash
+opencli doctor                         # Check extension + daemon connectivity
 ```
 
 ### Update
@@ -103,11 +101,6 @@ You can install the extension via either method:
 2. Click **Load unpacked** and select the `extension/` directory from this repository.
 
 That's it! The daemon auto-starts when you run any browser command. No tokens, no manual configuration.
-
-> **Tip**: Use `opencli doctor` for ongoing diagnosis:
-> ```bash
-> opencli doctor            # Check extension + daemon connectivity
-> ```
 
 ## Built-in Commands
 
