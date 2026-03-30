@@ -8,10 +8,11 @@ Run `opencli list` for the live registry.
 |------|----------|------|
 | **[twitter](/adapters/browser/twitter)** | `trending` `bookmarks` `profile` `search` `timeline` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `article` `follow` `unfollow` `bookmark` `unbookmark` `download` `accept` `reply-dm` `block` `unblock` `hide-reply` | 🔐 Browser |
 | **[reddit](/adapters/browser/reddit)** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `save` `comment` `subscribe` `saved` `upvoted` | 🔐 Browser |
+| **[tieba](/adapters/browser/tieba)** | `hot` `posts` `search` `read` | 🔐 Browser |
 | **[bilibili](/adapters/browser/bilibili)** | `hot` `search` `me` `favorite` `history` `feed` `subtitle` `dynamic` `ranking` `following` `user-videos` `download` | 🔐 Browser |
 | **[zhihu](/adapters/browser/zhihu)** | `hot` `search` `question` `download` | 🔐 Browser |
 | **[xiaohongshu](/adapters/browser/xiaohongshu)** | `search` `notifications` `feed` `user` `download` `publish` `creator-notes` `creator-note-detail` `creator-notes-summary` `creator-profile` `creator-stats` | 🔐 Browser |
-| **[xueqiu](/adapters/browser/xueqiu)** | `feed` `hot-stock` `hot` `search` `stock` `watchlist` `earnings-date` `fund-holdings` `fund-snapshot` | 🔐 Browser |
+| **[xueqiu](/adapters/browser/xueqiu)** | `feed` `hot-stock` `hot` `search` `stock` `comments` `watchlist` `earnings-date` `fund-holdings` `fund-snapshot` | 🔐 Browser |
 | **[youtube](/adapters/browser/youtube)** | `search` `video` `transcript` | 🔐 Browser |
 | **[v2ex](/adapters/browser/v2ex)** | `hot` `latest` `topic` `node` `user` `member` `replies` `nodes` `daily` `me` `notifications` | 🌐 / 🔐 |
 | **[bloomberg](/adapters/browser/bloomberg)** | `main` `markets` `economics` `industries` `tech` `politics` `businessweek` `opinions` `feeds` `news` | 🌐 / 🔐 |
@@ -28,7 +29,7 @@ Run `opencli list` for the live registry.
 | **[linux-do](/adapters/browser/linux-do)** | `feed` `categories` `tags` `search` `topic` `user-topics` `user-posts` | 🔐 Browser |
 | **[chaoxing](/adapters/browser/chaoxing)** | `assignments` `exams` | 🔐 Browser |
 | **[grok](/adapters/browser/grok)** | `ask` | 🔐 Browser |
-| **[doubao](/adapters/browser/doubao)** | `status` `new` `send` `read` `ask` | 🔐 Browser |
+| **[doubao](/adapters/browser/doubao)** | `status` `new` `send` `read` `ask` `history` `detail` `meeting-summary` `meeting-transcript` | 🔐 Browser |
 | **[weread](/adapters/browser/weread)** | `shelf` `search` `book` `ranking` `notebooks` `highlights` `notes` | 🔐 Browser |
 | **[douban](/adapters/browser/douban)** | `search` `top250` `subject` `photos` `download` `marks` `reviews` `movie-hot` `book-hot` | 🔐 Browser |
 | **[facebook](/adapters/browser/facebook)** | `feed` `profile` `search` `friends` `groups` `events` `notifications` `memories` `add-friend` `join-group` | 🔐 Browser |
@@ -45,6 +46,7 @@ Run `opencli list` for the live registry.
 | **[weixin](/adapters/browser/weixin)** | `download` | 🔐 Browser |
 | **[36kr](/adapters/browser/36kr)** | `news` `hot` `search` `article` | 🌐 / 🔐 |
 | **[producthunt](/adapters/browser/producthunt)** | `posts` `today` `hot` `browse` | 🌐 / 🔐 |
+| **[ones](/adapters/browser/ones)** | `login` `me` `token-info` `tasks` `my-tasks` `task` `worklog` `logout` | 🔐 Browser Bridge + `ONES_BASE_URL` |
 
 ## Public API Adapters
 
@@ -62,6 +64,7 @@ Run `opencli list` for the live registry.
 | **[barchart](/adapters/browser/barchart)** | `quote` `options` `greeks` `flow` | 🌐 Public |
 | **[hf](/adapters/browser/hf)** | `top` | 🌐 Public |
 | **[sinafinance](/adapters/browser/sinafinance)** | `news` | 🌐 Public |
+| **[spotify](/adapters/browser/spotify)** | `auth` `status` `play` `pause` `next` `prev` `volume` `search` `queue` `shuffle` `repeat` | 🔑 OAuth API |
 | **[stackoverflow](/adapters/browser/stackoverflow)** | `hot` `search` `bounties` `unanswered` | 🌐 Public |
 | **[wikipedia](/adapters/browser/wikipedia)** | `search` `summary` `random` `trending` | 🌐 Public |
 | **[lobsters](/adapters/browser/lobsters)** | `hot` `newest` `active` `tag` | 🌐 Public |

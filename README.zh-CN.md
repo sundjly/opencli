@@ -122,16 +122,17 @@ npm install -g @jackwener/opencli@latest
 |------|------|------|
 | **twitter** | `trending` `bookmarks` `profile` `search` `timeline` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `article` `follow` `unfollow` `bookmark` `unbookmark` `download` `accept` `reply-dm` `block` `unblock` `hide-reply` | 浏览器 |
 | **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `save` `comment` `subscribe` `saved` `upvoted` | 浏览器 |
+| **tieba** | `hot` `posts` `search` `read` | 浏览器 |
 | **cursor** | `status` `send` `read` `new` `dump` `composer` `model` `extract-code` `ask` `screenshot` `history` `export` | 桌面端 |
 | **bilibili** | `hot` `search` `me` `favorite` `history` `feed` `subtitle` `dynamic` `ranking` `following` `user-videos` `download` | 浏览器 |
 | **codex** | `status` `send` `read` `new` `dump` `extract-diff` `model` `ask` `screenshot` `history` `export` | 桌面端 |
 | **chatwise** | `status` `new` `send` `read` `ask` `model` `history` `export` `screenshot` | 桌面端 |
-| **doubao** | `status` `new` `send` `read` `ask` | 浏览器 |
+| **doubao** | `status` `new` `send` `read` `ask` `history` `detail` `meeting-summary` `meeting-transcript` | 浏览器 |
 | **doubao-app** | `status` `new` `send` `read` `ask` `screenshot` `dump` | 桌面端 |
 | **notion** | `status` `search` `read` `new` `write` `sidebar` `favorites` `export` | 桌面端 |
 | **discord-app** | `status` `send` `read` `channels` `servers` `search` `members` | 桌面端 |
 | **v2ex** | `hot` `latest` `topic` `node` `user` `member` `replies` `nodes` `daily` `me` `notifications` | 公开 / 浏览器 |
-| **xueqiu** | `feed` `hot-stock` `hot` `search` `stock` `watchlist` `earnings-date` `fund-holdings` `fund-snapshot` | 浏览器 |
+| **xueqiu** | `feed` `hot-stock` `hot` `search` `stock` `comments` `watchlist` `earnings-date` `fund-holdings` `fund-snapshot` | 浏览器 |
 | **antigravity** | `status` `send` `read` `new` `dump` `extract-code` `model` `watch` | 桌面端 |
 | **chatgpt** | `status` `new` `send` `read` `ask` `model` | 桌面端 |
 | **xiaohongshu** | `search` `notifications` `feed` `user` `download` `publish` `creator-notes` `creator-note-detail` `creator-notes-summary` `creator-profile` `creator-stats` | 浏览器 |
@@ -173,6 +174,7 @@ npm install -g @jackwener/opencli@latest
 | **douban** | `search` `top250` `subject` `photos` `download` `marks` `reviews` `movie-hot` `book-hot` | 浏览器 |
 | **facebook** | `feed` `profile` `search` `friends` `groups` `events` `notifications` `memories` `add-friend` `join-group` | 浏览器 |
 | **google** | `news` `search` `suggest` `trends` | 公开 |
+| **spotify** | `auth` `status` `play` `pause` `next` `prev` `volume` `search` `queue` `shuffle` `repeat` | OAuth API |
 | **36kr** | `news` `hot` `search` `article` | 公开 / 浏览器 |
 | **imdb** | `search` `title` `top` `trending` `person` `reviews` | 公开 |
 | **producthunt** | `posts` `today` `hot` `browse` | 公开 / 浏览器 |
@@ -183,7 +185,10 @@ npm install -g @jackwener/opencli@latest
 | **substack** | `feed` `search` `publication` | 浏览器 |
 | **pixiv** | `ranking` `search` `user` `illusts` `detail` `download` | 浏览器 |
 | **tiktok** | `explore` `search` `profile` `user` `following` `follow` `unfollow` `like` `unlike` `comment` `save` `unsave` `live` `notifications` `friends` | 浏览器 |
+| **bluesky** | `search` `trending` `user` `profile` `thread` `feeds` `followers` `following` `starter-packs` | 公开 |
+| **douyin** | `videos` `publish` `drafts` `draft` `delete` `stats` `profile` `update` `hashtag` `location` `activities` `collections` | 浏览器 |
 
+66+ 适配器 — **[→ 查看完整命令列表](./docs/adapters/index.md)**
 
 ### 外部 CLI 枢纽
 
@@ -194,8 +199,10 @@ OpenCLI 也可以作为你现有命令行工具的统一入口，负责发现、
 | **gh** | GitHub CLI | `opencli gh pr list --limit 5` |
 | **obsidian** | Obsidian 仓库管理 | `opencli obsidian search query="AI"` |
 | **docker** | Docker 命令行工具 | `opencli docker ps` |
-| **readwise** | Readwise / Reader CLI | `opencli readwise login` |
-| **gws** | Google Workspace CLI — Docs, Sheets, Drive, Gmail, Calendar | `opencli gws docs list` |
+| **lark-cli** | 飞书 CLI — 消息、文档、日历、任务，200+ 命令 | `opencli lark-cli calendar +agenda` |
+| **dingtalk** | 钉钉 CLI — 钉钉全套产品能力的跨平台命令行工具，支持人类和 AI Agent 使用 | `opencli dingtalk msg send --to user "hello"` |
+| **wecom** | 企业微信 CLI — 企业微信开放平台命令行工具，支持人类和 AI Agent 使用 | `opencli wecom msg send --to user "hello"` |
+| **vercel** | Vercel — 部署项目、管理域名、环境变量、日志 | `opencli vercel deploy --prod` |
 
 **零配置透传**：OpenCLI 会把你的输入原样转发给底层二进制，保留原生 stdout / stderr 行为。
 
@@ -293,6 +300,31 @@ opencli bilibili hot -f yaml    # YAML（更适合人类直接阅读）
 opencli bilibili hot -f md      # Markdown
 opencli bilibili hot -f csv     # CSV
 opencli bilibili hot -v         # 详细模式：展示管线执行步骤调试信息
+```
+
+## 退出码
+
+opencli 遵循 Unix `sysexits.h` 惯例，可无缝接入 shell 管道和 CI 脚本：
+
+| 退出码 | 含义 | 触发场景 |
+|--------|------|----------|
+| `0` | 成功 | 命令正常完成 |
+| `1` | 通用错误 | 未分类的意外错误 |
+| `2` | 用法错误 | 参数错误或未知命令 |
+| `66` | 无数据 | 命令返回空结果（`EX_NOINPUT`） |
+| `69` | 服务不可用 | Browser Bridge 未连接（`EX_UNAVAILABLE`） |
+| `75` | 临时失败 | 命令超时，可重试（`EX_TEMPFAIL`） |
+| `77` | 需要认证 | 未登录目标网站（`EX_NOPERM`） |
+| `78` | 配置错误 | 凭证缺失或配置有误（`EX_CONFIG`） |
+| `130` | 中断 | Ctrl-C / SIGINT |
+
+```bash
+opencli bilibili hot 2>/dev/null
+case $? in
+  0)   echo "ok" ;;
+  69)  echo "请先启动 Browser Bridge" ;;
+  77)  echo "请先登录 bilibili.com" ;;
+esac
 ```
 
 ## 插件

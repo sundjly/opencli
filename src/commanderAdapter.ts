@@ -18,6 +18,7 @@ import { render as renderOutput } from './output.js';
 import { executeCommand } from './execution.js';
 import {
   CliError,
+  EXIT_CODES,
   ERROR_ICONS,
   getErrorMessage,
   BrowserConnectError,
@@ -32,7 +33,7 @@ import {
 import { checkDaemonStatus } from './browser/discover.js';
 
 export function normalizeArgValue(argType: string | undefined, value: unknown, name: string): unknown {
-  if (argType !== 'bool') return value;
+  if (argType !== 'bool' && argType !== 'boolean') return value;
   if (typeof value === 'boolean') return value;
   if (value == null || value === '') return false;
 
@@ -40,7 +41,7 @@ export function normalizeArgValue(argType: string | undefined, value: unknown, n
   if (normalized === 'true') return true;
   if (normalized === 'false') return false;
 
-  throw new CliError('ARGUMENT', `"${name}" must be either "true" or "false".`);
+  throw new ArgumentError(`"${name}" must be either "true" or "false".`);
 }
 
 /**
@@ -117,9 +118,31 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
       });
     } catch (err) {
       await renderError(err, fullName(cmd), optionsRecord.verbose === true);
-      process.exitCode = 1;
+      process.exitCode = resolveExitCode(err);
     }
   });
+}
+
+// ── Exit code resolution ─────────────────────────────────────────────────────
+
+/**
+ * Map any thrown value to a Unix process exit code.
+ *
+ * - CliError subclasses carry their own exitCode (set in errors.ts).
+ * - Generic Error objects are classified by message pattern so that
+ *   un-typed auth / not-found errors from adapters still produce
+ *   meaningful exit codes for shell scripts.
+ */
+function resolveExitCode(err: unknown): number {
+  if (err instanceof CliError) return err.exitCode;
+
+  // Pattern-based fallback for untyped errors thrown by third-party adapters.
+  const msg = getErrorMessage(err);
+  const kind = classifyGenericError(msg);
+  if (kind === 'auth')      return EXIT_CODES.NOPERM;
+  if (kind === 'not-found') return EXIT_CODES.EMPTY_RESULT;
+  if (kind === 'http')      return EXIT_CODES.GENERIC_ERROR;  // HTTP 4xx/5xx → generic; renderer shows details
+  return EXIT_CODES.GENERIC_ERROR;
 }
 
 // ── Error rendering ──────────────────────────────────────────────────────────

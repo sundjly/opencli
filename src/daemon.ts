@@ -22,6 +22,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import { DEFAULT_DAEMON_PORT } from './constants.js';
+import { EXIT_CODES } from './errors.js';
 
 const PORT = parseInt(process.env.OPENCLI_DAEMON_PORT ?? String(DEFAULT_DAEMON_PORT), 10);
 const IDLE_TIMEOUT = 5 * 60 * 1000; // 5 minutes
@@ -53,7 +54,7 @@ function resetIdleTimer(): void {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
     console.error('[daemon] Idle timeout, shutting down');
-    process.exit(0);
+    process.exit(EXIT_CODES.SUCCESS);
   }, IDLE_TIMEOUT);
 }
 
@@ -102,7 +103,22 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return;
   }
 
-  // Require custom header on all HTTP requests.  Browsers cannot attach
+  const url = req.url ?? '/';
+  const pathname = url.split('?')[0];
+
+  // Health-check endpoint — no X-OpenCLI header required.
+  // Used by the extension to silently probe daemon reachability before
+  // attempting a WebSocket connection (avoids uncatchable ERR_CONNECTION_REFUSED).
+  // Security note: this endpoint is reachable by any client that passes the
+  // origin check above (chrome-extension:// or no Origin header, e.g. curl).
+  // Timing side-channels can reveal daemon presence to local processes, which
+  // is an accepted risk given the daemon is loopback-only and short-lived.
+  if (req.method === 'GET' && pathname === '/ping') {
+    jsonResponse(res, 200, { ok: true });
+    return;
+  }
+
+  // Require custom header on all other HTTP requests.  Browsers cannot attach
   // custom headers in "simple" requests, and our preflight returns no
   // Access-Control-Allow-Headers, so scripted fetch() from web pages is
   // blocked even if Origin check is somehow bypassed.
@@ -110,9 +126,6 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     jsonResponse(res, 403, { ok: false, error: 'Forbidden: missing X-OpenCLI header' });
     return;
   }
-
-  const url = req.url ?? '/';
-  const pathname = url.split('?')[0];
 
   if (req.method === 'GET' && pathname === '/status') {
     jsonResponse(res, 200, {
@@ -198,6 +211,7 @@ const wss = new WebSocketServer({
 wss.on('connection', (ws: WebSocket) => {
   console.error('[daemon] Extension connected');
   extensionWs = ws;
+  extensionVersion = null; // cleared until hello message arrives
 
   // ── Heartbeat: ping every 15s, close if 2 pongs missed ──
   let missedPongs = 0;
@@ -290,10 +304,10 @@ httpServer.listen(PORT, '127.0.0.1', () => {
 httpServer.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`[daemon] Port ${PORT} already in use — another daemon is likely running. Exiting.`);
-    process.exit(1);
+    process.exit(EXIT_CODES.SERVICE_UNAVAIL);
   }
   console.error('[daemon] Server error:', err.message);
-  process.exit(1);
+  process.exit(EXIT_CODES.GENERIC_ERROR);
 });
 
 // Graceful shutdown
@@ -306,7 +320,7 @@ function shutdown(): void {
   pending.clear();
   if (extensionWs) extensionWs.close();
   httpServer.close();
-  process.exit(0);
+  process.exit(EXIT_CODES.SUCCESS);
 }
 
 process.on('SIGTERM', shutdown);

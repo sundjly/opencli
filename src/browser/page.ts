@@ -22,11 +22,19 @@ import {
   typeTextJs,
   pressKeyJs,
   waitForTextJs,
+  waitForCaptureJs,
+  waitForSelectorJs,
   scrollJs,
   autoScrollJs,
   networkRequestsJs,
   waitForDomStableJs,
 } from './dom-helpers.js';
+
+export function isRetryableSettleError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes('Inspected target navigated or closed')
+    || (message.includes('-32000') && message.toLowerCase().includes('target'));
+}
 
 /**
  * Page — implements IPage by talking to the daemon via HTTP.
@@ -36,6 +44,8 @@ export class Page implements IPage {
 
   /** Active tab ID, set after navigate and used in all subsequent commands */
   private _tabId: number | undefined;
+  /** Last navigated URL, tracked in-memory to avoid extra round-trips */
+  private _lastUrl: string | null = null;
 
   /** Helper: spread workspace into command params */
   private _wsOpt(): { workspace: string } {
@@ -55,10 +65,11 @@ export class Page implements IPage {
       url,
       ...this._cmdOpts(),
     }) as { tabId?: number };
-    // Remember the tabId for subsequent exec calls
+    // Remember the tabId and URL for subsequent calls
     if (result?.tabId) {
       this._tabId = result.tabId;
     }
+    this._lastUrl = url;
     // Inject stealth anti-detection patches (guard flag prevents double-injection).
     try {
       await sendCommand('exec', {
@@ -72,11 +83,32 @@ export class Page implements IPage {
     // settleMs is now a timeout cap (default 1000ms), not a fixed wait.
     if (options?.waitUntil !== 'none') {
       const maxMs = options?.settleMs ?? 1000;
-      await sendCommand('exec', {
+      const settleOpts = {
         code: waitForDomStableJs(maxMs, Math.min(500, maxMs)),
         ...this._cmdOpts(),
-      });
+      };
+      try {
+        await sendCommand('exec', settleOpts);
+      } catch (err) {
+        if (!isRetryableSettleError(err)) throw err;
+        // SPA client-side redirects can invalidate the CDP target after
+        // chrome.tabs reports 'complete'. Wait briefly for the new document
+        // to load, then retry the settle probe once.
+        try {
+          await new Promise((r) => setTimeout(r, 200));
+          await sendCommand('exec', settleOpts);
+        } catch (retryErr) {
+          if (!isRetryableSettleError(retryErr)) throw retryErr;
+          // Retry also failed — give up silently. Settle is best-effort
+          // after successful navigation; the next real command will surface
+          // any persistent target error immediately.
+        }
+      }
     }
+  }
+
+  async getCurrentUrl(): Promise<string | null> {
+    return this._lastUrl;
   }
 
   /** Close the automation window in the extension */
@@ -183,11 +215,33 @@ export class Page implements IPage {
 
   async wait(options: number | WaitOptions): Promise<void> {
     if (typeof options === 'number') {
+      if (options >= 1) {
+        // For waits >= 1s, use DOM-stable check: return early when the page
+        // stops mutating, with the original wait time as the hard cap.
+        // This turns e.g. `page.wait(5)` from a fixed 5s sleep into
+        // "wait until DOM is stable, max 5s" — often completing in <1s.
+        try {
+          const maxMs = options * 1000;
+          await sendCommand('exec', {
+            code: waitForDomStableJs(maxMs, Math.min(500, maxMs)),
+            ...this._cmdOpts(),
+          });
+          return;
+        } catch {
+          // Fallback: fixed sleep (e.g. if page has no DOM yet)
+        }
+      }
       await new Promise(resolve => setTimeout(resolve, options * 1000));
       return;
     }
     if (typeof options.time === 'number') {
       await new Promise(resolve => setTimeout(resolve, options.time! * 1000));
+      return;
+    }
+    if (options.selector) {
+      const timeout = (options.timeout ?? 10) * 1000;
+      const code = waitForSelectorJs(options.selector, timeout);
+      await sendCommand('exec', { code, ...this._cmdOpts() });
       return;
     }
     if (options.text) {
@@ -283,6 +337,30 @@ export class Page implements IPage {
     // Same as installInterceptor: must go through evaluate() for IIFE wrapping
     const result = await this.evaluate(generateReadInterceptedJs('__opencli_xhr'));
     return Array.isArray(result) ? result : [];
+  }
+
+  /**
+   * Set local file paths on a file input element via CDP DOM.setFileInputFiles.
+   * Chrome reads the files directly from the local filesystem, avoiding the
+   * payload size limits of base64-in-evaluate.
+   */
+  async setFileInput(files: string[], selector?: string): Promise<void> {
+    const result = await sendCommand('set-file-input', {
+      files,
+      selector,
+      ...this._cmdOpts(),
+    }) as { count?: number };
+    if (!result?.count) {
+      throw new Error('setFileInput returned no count — command may not be supported by the extension');
+    }
+  }
+
+  async waitForCapture(timeout: number = 10): Promise<void> {
+    const maxMs = timeout * 1000;
+    await sendCommand('exec', {
+      code: waitForCaptureJs(maxMs),
+      ...this._cmdOpts(),
+    });
   }
 }
 

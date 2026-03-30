@@ -25,6 +25,8 @@ import {
   autoScrollJs,
   networkRequestsJs,
   waitForDomStableJs,
+  waitForCaptureJs,
+  waitForSelectorJs,
 } from './dom-helpers.js';
 import { isRecord, saveBase64ToFile } from '../utils.js';
 
@@ -173,6 +175,7 @@ export class CDPBridge implements IBrowserFactory {
 
 class CDPPage implements IPage {
   private _pageEnabled = false;
+  private _lastUrl: string | null = null;
   constructor(private bridge: CDPBridge) {}
 
   async goto(url: string, options?: { waitUntil?: 'load' | 'none'; settleMs?: number }): Promise<void> {
@@ -183,6 +186,7 @@ class CDPPage implements IPage {
     const loadPromise = this.bridge.waitForEvent('Page.loadEventFired', 30_000).catch(() => {});
     await this.bridge.send('Page.navigate', { url });
     await loadPromise;
+    this._lastUrl = url;
     if (options?.waitUntil !== 'none') {
       const maxMs = options?.settleMs ?? 1000;
       await this.evaluate(waitForDomStableJs(maxMs, Math.min(500, maxMs)));
@@ -245,12 +249,26 @@ class CDPPage implements IPage {
 
   async wait(options: number | WaitOptions): Promise<void> {
     if (typeof options === 'number') {
+      if (options >= 1) {
+        try {
+          const maxMs = options * 1000;
+          await this.evaluate(waitForDomStableJs(maxMs, Math.min(500, maxMs)));
+          return;
+        } catch {
+          // Fallback: fixed sleep
+        }
+      }
       await new Promise((resolve) => setTimeout(resolve, options * 1000));
       return;
     }
     if (typeof options.time === 'number') {
       const waitTime = options.time;
       await new Promise((resolve) => setTimeout(resolve, waitTime * 1000));
+      return;
+    }
+    if (options.selector) {
+      const timeout = (options.timeout ?? 10) * 1000;
+      await this.evaluate(waitForSelectorJs(options.selector, timeout));
       return;
     }
     if (options.text) {
@@ -307,6 +325,10 @@ class CDPPage implements IPage {
     return [];
   }
 
+  async getCurrentUrl(): Promise<string | null> {
+    return this._lastUrl;
+  }
+
   async installInterceptor(pattern: string): Promise<void> {
     const { generateInterceptorJs } = await import('../interceptor.js');
     await this.evaluate(generateInterceptorJs(JSON.stringify(pattern), {
@@ -319,6 +341,11 @@ class CDPPage implements IPage {
     const { generateReadInterceptedJs } = await import('../interceptor.js');
     const result = await this.evaluate(generateReadInterceptedJs('__opencli_xhr'));
     return Array.isArray(result) ? result : [];
+  }
+
+  async waitForCapture(timeout: number = 10): Promise<void> {
+    const maxMs = timeout * 1000;
+    await this.evaluate(waitForCaptureJs(maxMs));
   }
 }
 
