@@ -4,7 +4,7 @@ description: Make websites accessible for AI agents. Navigate, click, type, extr
 allowed-tools: Bash(opencli:*), Read, Edit, Write
 ---
 
-# OpenCLI — Make Websites Accessible for AI Agents
+# OpenCLI Operate — Browser Automation for AI Agents
 
 Control Chrome step-by-step via CLI. Reuses existing login sessions — no passwords needed.
 
@@ -16,25 +16,49 @@ opencli doctor    # Verify extension + daemon connectivity
 
 Requires: Chrome running + OpenCLI Browser Bridge extension installed.
 
-## Quickstart for AI Agents (1 step)
+## Critical Rules
 
-Point your AI agent to this file. It contains everything needed to operate browsers.
+1. **ALWAYS use `state` to inspect the page, NEVER use `screenshot`** — `state` returns structured DOM with `[N]` element indices, is instant and costs zero tokens. `screenshot` requires vision processing and is slow. Only use `screenshot` when the user explicitly asks to save a visual.
+2. **ALWAYS use `click`/`type`/`select` for interaction, NEVER use `eval` to click or type** — `eval "el.click()"` bypasses scrollIntoView and CDP click pipeline, causing failures on off-screen elements. Use `state` to find the `[N]` index, then `click <N>`.
+3. **Verify inputs with `get value`, not screenshots** — after `type`, run `get value <index>` to confirm.
+4. **Run `state` after every page change** — after `open`, `click` (on links), `scroll`, always run `state` to see the new elements and their indices. Never guess indices.
+5. **Chain safe commands with `&&`** — `type 3 "a" && type 4 "b" && click 7` is one call instead of three. But always run `state` first to get correct indices before chaining.
+6. **`eval` is read-only** — use `eval` ONLY for data extraction (`JSON.stringify(...)`), never for clicking, typing, or navigating. Always wrap in IIFE to avoid variable conflicts: `eval "(function(){ const x = ...; return JSON.stringify(x); })()"`.
+7. **Prefer `network` to discover APIs** — most sites have JSON APIs. API-based adapters are more reliable than DOM scraping.
 
-## Quickstart for Humans (3 steps)
+## Command Cost Guide
 
+| Cost | Commands | When to use |
+|------|----------|-------------|
+| **Free & instant** | `state`, `get *`, `eval`, `network`, `scroll`, `keys` | Default — use these |
+| **Free but changes page** | `open`, `click`, `type`, `select`, `back` | Interaction — run `state` after |
+| **Expensive (vision tokens)** | `screenshot` | ONLY when user needs a saved image |
+
+## Action Chaining Rules
+
+Commands can be chained with `&&`. The browser persists via daemon, so chaining is safe.
+
+**Safe to chain** — these don't change the page structure:
 ```bash
-npm install -g @jackwener/opencli          # 1. Install
-# Install extension from chrome://extensions  # 2. Load extension
-opencli operate open https://example.com    # 3. Go!
+# Fill multiple fields then submit
+opencli operate type 3 "hello" && opencli operate type 4 "world" && opencli operate click 7
+
+# Open and inspect
+opencli operate open https://example.com && opencli operate state
 ```
+
+**Page-changing — always put last** in a chain (subsequent commands see stale indices):
+- `open <url>`, `back`, `click <link/button that navigates>`
+
+**Rule**: Chain when you already know the indices. Run `state` separately when you need to discover indices first.
 
 ## Core Workflow
 
 1. **Navigate**: `opencli operate open <url>`
-2. **Inspect**: `opencli operate state` → see elements with `[N]` indices
+2. **Inspect**: `opencli operate state` → elements with `[N]` indices
 3. **Interact**: use indices — `click`, `type`, `select`, `keys`
-4. **Wait**: `opencli operate wait selector ".loaded"` or `wait text "Success"`
-5. **Verify**: `opencli operate get title` or `opencli operate screenshot`
+4. **Wait** (if needed): `opencli operate wait selector ".loaded"` or `wait text "Success"`
+5. **Verify**: `opencli operate state` or `opencli operate get value <N>`
 6. **Repeat**: browser stays open between commands
 7. **Save**: write a TS adapter to `~/.opencli/clis/<site>/<command>.ts`
 
@@ -43,26 +67,26 @@ opencli operate open https://example.com    # 3. Go!
 ### Navigation
 
 ```bash
-opencli operate open <url>              # Open URL
-opencli operate back                    # Go back
+opencli operate open <url>              # Open URL (page-changing)
+opencli operate back                    # Go back (page-changing)
 opencli operate scroll down             # Scroll (up/down, --amount N)
 opencli operate scroll up --amount 1000
 ```
 
-### Inspect
+### Inspect (free & instant)
 
 ```bash
-opencli operate state                   # Elements with [N] indices
-opencli operate screenshot [path.png]   # Screenshot
+opencli operate state                   # Structured DOM with [N] indices — PRIMARY tool
+opencli operate screenshot [path.png]   # Save visual to file — ONLY for user deliverables
 ```
 
-### Get (structured data)
+### Get (free & instant)
 
 ```bash
 opencli operate get title               # Page title
 opencli operate get url                 # Current URL
 opencli operate get text <index>        # Element text content
-opencli operate get value <index>       # Input/textarea value
+opencli operate get value <index>       # Input/textarea value (use to verify after type)
 opencli operate get html                # Full page HTML
 opencli operate get html --selector "h1" # Scoped HTML
 opencli operate get attributes <index>  # Element attributes
@@ -86,11 +110,16 @@ opencli operate wait text "Success"               # Wait for text
 opencli operate wait time 3                       # Wait N seconds
 ```
 
-### Extract
+### Extract (free & instant, read-only)
+
+Use `eval` ONLY for reading data. Never use it to click, type, or navigate.
 
 ```bash
 opencli operate eval "document.title"
 opencli operate eval "JSON.stringify([...document.querySelectorAll('h2')].map(e => e.textContent))"
+
+# IMPORTANT: wrap complex logic in IIFE to avoid "already declared" errors
+opencli operate eval "(function(){ const items = [...document.querySelectorAll('.item')]; return JSON.stringify(items.map(e => e.textContent)); })()"
 ```
 
 ### Network (API Discovery)
@@ -128,8 +157,7 @@ opencli operate close
 ```bash
 opencli operate open https://httpbin.org/forms/post
 opencli operate state                   # See [3] input "Customer Name", [4] input "Telephone"
-opencli operate type 3 "OpenCLI"
-opencli operate type 4 "555-0100"
+opencli operate type 3 "OpenCLI" && opencli operate type 4 "555-0100"
 opencli operate get value 3             # Verify: "OpenCLI"
 opencli operate close
 ```
@@ -204,10 +232,19 @@ Save to `~/.opencli/clis/<site>/<command>.ts` → immediately available as `open
 
 **Always prefer API over UI** — if you discovered an API during browsing, use `fetch()` directly.
 
+## Tips
+
+1. **Always `state` first** — never guess element indices, always inspect first
+2. **Sessions persist** — browser stays open between commands, no need to re-open
+3. **Use `eval` for data extraction** — `eval "JSON.stringify(...)"` is faster than multiple `get` calls
+4. **Use `network` to find APIs** — JSON APIs are more reliable than DOM scraping
+5. **Alias**: `opencli op` is shorthand for `opencli operate`
+
 ## Troubleshooting
 
 | Error | Fix |
 |-------|-----|
 | "Browser not connected" | Run `opencli doctor` |
 | "attach failed: chrome-extension://" | Disable 1Password temporarily |
-| Element not found | `opencli operate scroll down` then `opencli operate state` |
+| Element not found | `opencli operate scroll down && opencli operate state` |
+| Stale indices after page change | Run `opencli operate state` again to get fresh indices |
