@@ -200,7 +200,7 @@ describe('background tab isolation', () => {
     ]));
   });
 
-  it('rebinds site:notebooklm to the active notebook tab instead of a home tab', async () => {
+  it('keeps site:notebooklm inside its owned automation window instead of rebinding to a user tab', async () => {
     const { chrome, tabs } = createChromeMock();
     tabs[0].url = 'https://notebooklm.google.com/';
     tabs[0].title = 'NotebookLM Home';
@@ -213,184 +213,28 @@ describe('background tab isolation', () => {
 
     const tabId = await mod.__test__.resolveTabId(undefined, 'site:notebooklm');
 
-    expect(tabId).toBe(2);
+    expect(tabId).toBe(1);
     expect(mod.__test__.getSession('site:notebooklm')).toEqual(expect.objectContaining({
-      windowId: 2,
-      preferredTabId: 2,
-      owned: false,
+      windowId: 1,
     }));
   });
 
-  it('prefers a notebook tab over an active home tab for site:notebooklm', async () => {
+  it('idle timeout closes the automation window for site:notebooklm', async () => {
     const { chrome, tabs } = createChromeMock();
     tabs[0].url = 'https://notebooklm.google.com/';
     tabs[0].title = 'NotebookLM Home';
     tabs[0].active = true;
-    tabs[1].url = 'https://notebooklm.google.com/notebook/nb-passive';
-    tabs[1].title = 'Notebook';
-    tabs[1].active = false;
+
+    vi.useFakeTimers();
     vi.stubGlobal('chrome', chrome);
 
     const mod = await import('./background');
     mod.__test__.setAutomationWindowId('site:notebooklm', 1);
 
-    const tabId = await mod.__test__.resolveTabId(undefined, 'site:notebooklm');
-
-    expect(tabId).toBe(2);
-    expect(mod.__test__.getSession('site:notebooklm')).toEqual(expect.objectContaining({
-      windowId: 2,
-      preferredTabId: 2,
-      owned: false,
-    }));
-  });
-
-  it('detaches an adopted workspace session on idle instead of closing the user window', async () => {
-    const { chrome } = createChromeMock();
-    vi.stubGlobal('chrome', chrome);
-    vi.useFakeTimers();
-
-    const mod = await import('./background');
-    mod.__test__.setSession('site:notebooklm', {
-      windowId: 2,
-      preferredTabId: 2,
-      owned: false,
-    });
-
     mod.__test__.resetWindowIdleTimer('site:notebooklm');
     await vi.advanceTimersByTimeAsync(30001);
 
-    expect(chrome.windows.remove).not.toHaveBeenCalled();
+    expect(chrome.windows.remove).toHaveBeenCalledWith(1);
     expect(mod.__test__.getSession('site:notebooklm')).toBeNull();
-  });
-
-  it('binds the active NotebookLM tab into the workspace explicitly', async () => {
-    const { chrome, tabs } = createChromeMock();
-    tabs[1].url = 'https://notebooklm.google.com/notebook/nb-active';
-    tabs[1].title = 'Bound Notebook';
-    tabs[1].active = true;
-    vi.stubGlobal('chrome', chrome);
-
-    const mod = await import('./background');
-    const result = await mod.__test__.handleBindCurrent(
-      {
-        id: 'bind-current',
-        action: 'bind-current',
-        workspace: 'site:notebooklm',
-        matchDomain: 'notebooklm.google.com',
-        matchPathPrefix: '/notebook/',
-      },
-      'site:notebooklm',
-    );
-
-    expect(result).toEqual({
-      id: 'bind-current',
-      ok: true,
-      data: expect.objectContaining({
-        tabId: 2,
-        windowId: 2,
-        url: 'https://notebooklm.google.com/notebook/nb-active',
-        title: 'Bound Notebook',
-        workspace: 'site:notebooklm',
-      }),
-    });
-    expect(mod.__test__.getSession('site:notebooklm')).toEqual(expect.objectContaining({
-      windowId: 2,
-      preferredTabId: 2,
-      owned: false,
-    }));
-  });
-
-  it('bind-current falls back to another matching notebook tab in the current window', async () => {
-    const { chrome, tabs } = createChromeMock();
-    tabs[0].windowId = 2;
-    tabs[0].url = 'https://notebooklm.google.com/';
-    tabs[0].title = 'NotebookLM Home';
-    tabs[0].active = true;
-    tabs[1].url = 'https://notebooklm.google.com/notebook/nb-passive';
-    tabs[1].title = 'Passive Notebook';
-    tabs[1].active = false;
-    vi.stubGlobal('chrome', chrome);
-
-    const mod = await import('./background');
-    const result = await mod.__test__.handleBindCurrent(
-      {
-        id: 'bind-fallback',
-        action: 'bind-current',
-        workspace: 'site:notebooklm',
-        matchDomain: 'notebooklm.google.com',
-        matchPathPrefix: '/notebook/',
-      },
-      'site:notebooklm',
-    );
-
-    expect(result).toEqual({
-      id: 'bind-fallback',
-      ok: true,
-      data: expect.objectContaining({
-        tabId: 2,
-        windowId: 2,
-        url: 'https://notebooklm.google.com/notebook/nb-passive',
-        title: 'Passive Notebook',
-      }),
-    });
-  });
-
-  it('bind-current falls back to a matching notebook tab in another window of the same profile', async () => {
-    const { chrome, tabs } = createChromeMock();
-    tabs[0].windowId = 3;
-    tabs[0].url = 'https://notebooklm.google.com/';
-    tabs[0].title = 'NotebookLM Home';
-    tabs[0].active = true;
-    tabs[1].windowId = 2;
-    tabs[1].url = 'https://notebooklm.google.com/notebook/nb-other-window';
-    tabs[1].title = 'Notebook In Other Window';
-    tabs[1].active = false;
-    vi.stubGlobal('chrome', chrome);
-
-    const mod = await import('./background');
-    const result = await mod.__test__.handleBindCurrent(
-      {
-        id: 'bind-cross-window',
-        action: 'bind-current',
-        workspace: 'site:notebooklm',
-        matchDomain: 'notebooklm.google.com',
-        matchPathPrefix: '/notebook/',
-      },
-      'site:notebooklm',
-    );
-
-    expect(result).toEqual({
-      id: 'bind-cross-window',
-      ok: true,
-      data: expect.objectContaining({
-        tabId: 2,
-        windowId: 2,
-        url: 'https://notebooklm.google.com/notebook/nb-other-window',
-        title: 'Notebook In Other Window',
-      }),
-    });
-  });
-
-  it('rejects bind-current when the active tab is not NotebookLM', async () => {
-    const { chrome } = createChromeMock();
-    vi.stubGlobal('chrome', chrome);
-
-    const mod = await import('./background');
-    const result = await mod.__test__.handleBindCurrent(
-      {
-        id: 'bind-miss',
-        action: 'bind-current',
-        workspace: 'site:notebooklm',
-        matchDomain: 'notebooklm.google.com',
-        matchPathPrefix: '/notebook/',
-      },
-      'site:notebooklm',
-    );
-
-    expect(result).toEqual({
-      id: 'bind-miss',
-      ok: false,
-      error: 'No visible tab matching notebooklm.google.com /notebook/',
-    });
   });
 });

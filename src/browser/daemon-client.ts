@@ -7,6 +7,7 @@
 import { DEFAULT_DAEMON_PORT } from '../constants.js';
 import type { BrowserSessionInfo } from '../types.js';
 import { sleep } from '../utils.js';
+import { isTransientBrowserError } from './errors.js';
 
 const DAEMON_PORT = parseInt(process.env.OPENCLI_DAEMON_PORT ?? String(DEFAULT_DAEMON_PORT), 10);
 const DAEMON_URL = `http://127.0.0.1:${DAEMON_PORT}`;
@@ -19,7 +20,7 @@ function generateId(): string {
 
 export interface DaemonCommand {
   id: string;
-  action: 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions' | 'set-file-input' | 'bind-current';
+  action: 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions' | 'set-file-input';
   tabId?: number;
   code?: string;
   workspace?: string;
@@ -27,8 +28,6 @@ export interface DaemonCommand {
   op?: string;
   index?: number;
   domain?: string;
-  matchDomain?: string;
-  matchPathPrefix?: string;
   format?: 'png' | 'jpeg';
   quality?: number;
   fullPage?: boolean;
@@ -114,12 +113,7 @@ export async function sendCommand(
 
       if (!result.ok) {
         // Check if error is a transient extension issue worth retrying
-        const errMsg = result.error ?? '';
-        const isTransient = errMsg.includes('Extension disconnected')
-          || errMsg.includes('Extension not connected')
-          || errMsg.includes('attach failed')
-          || errMsg.includes('no longer exists');
-        if (isTransient && attempt < maxRetries) {
+        if (isTransientBrowserError(new Error(result.error ?? '')) && attempt < maxRetries) {
           // Longer delay for extension recovery (service worker restart)
           await sleep(1500);
           continue;
@@ -146,8 +140,3 @@ export async function listSessions(): Promise<BrowserSessionInfo[]> {
   const result = await sendCommand('sessions');
   return Array.isArray(result) ? result : [];
 }
-
-export async function bindCurrentTab(workspace: string, opts: { matchDomain?: string; matchPathPrefix?: string } = {}): Promise<unknown> {
-  return sendCommand('bind-current', { workspace, ...opts });
-}
-

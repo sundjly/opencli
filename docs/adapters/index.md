@@ -29,7 +29,7 @@ Run `opencli list` for the live registry.
 | **[linux-do](./browser/linux-do)** | `feed` `categories` `tags` `search` `topic` `user-topics` `user-posts` | 🔐 Browser |
 | **[chaoxing](./browser/chaoxing)** | `assignments` `exams` | 🔐 Browser |
 | **[grok](./browser/grok)** | `ask` | 🔐 Browser |
-| **[notebooklm](./browser/notebooklm)** | `status` `list` `current` `get` `metadata` `bind-current` `use` `source-list` `source-get` `source-fulltext` `source-guide` `history` `note-list` `notes-list` `notes-get` `summary` | 🔐 Browser |
+| **[notebooklm](./browser/notebooklm)** | `status` `list` `open` `select` `current` `get` `metadata` `source-list` `source-get` `source-fulltext` `source-guide` `history` `note-list` `notes-list` `notes-get` `summary` | 🔐 Browser |
 | **[doubao](./browser/doubao)** | `status` `new` `send` `read` `ask` `history` `detail` `meeting-summary` `meeting-transcript` | 🔐 Browser |
 | **[weread](./browser/weread)** | `shelf` `search` `book` `ranking` `notebooks` `highlights` `notes` | 🔐 Browser |
 | **[douban](./browser/douban)** | `search` `top250` `subject` `photos` `download` `marks` `reviews` `movie-hot` `book-hot` | 🔐 Browser |
