@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { getRegistry } from '../../registry.js';
-import { AuthRequiredError } from '../../errors.js';
+import { AuthRequiredError, CliError } from '../../errors.js';
 import './question.js';
 
 describe('zhihu question', () => {
@@ -8,21 +8,25 @@ describe('zhihu question', () => {
     const cmd = getRegistry().get('zhihu/question');
     expect(cmd?.func).toBeTypeOf('function');
 
-    const evaluate = vi.fn().mockImplementation(async (_fn: unknown, args: { questionId: string; answerLimit: number }) => {
-      expect(args).toEqual({ questionId: '2021881398772981878', answerLimit: 3 });
+    const goto = vi.fn().mockResolvedValue(undefined);
+    const evaluate = vi.fn().mockImplementation(async (js: string) => {
+      expect(js).toContain('questions/2021881398772981878/answers?limit=3');
+      expect(js).toContain("credentials: 'include'");
       return {
         ok: true,
         answers: [
           {
-            author: { name: 'alice' },
-            voteup_count: 12,
-            content: '<p>Hello <b>Zhihu</b></p>',
+            rank: 1,
+            author: 'alice',
+            votes: 12,
+            content: 'Hello Zhihu',
           },
         ],
       };
     });
 
     const page = {
+      goto,
       evaluate,
     } as any;
 
@@ -37,6 +41,7 @@ describe('zhihu question', () => {
       },
     ]);
 
+    expect(goto).toHaveBeenCalledWith('https://www.zhihu.com/question/2021881398772981878');
     expect(evaluate).toHaveBeenCalledTimes(1);
   });
 
@@ -45,6 +50,7 @@ describe('zhihu question', () => {
     expect(cmd?.func).toBeTypeOf('function');
 
     const page = {
+      goto: vi.fn().mockResolvedValue(undefined),
       evaluate: vi.fn().mockResolvedValue({ ok: false, status: 403 }),
     } as any;
 
@@ -58,6 +64,7 @@ describe('zhihu question', () => {
     expect(cmd?.func).toBeTypeOf('function');
 
     const page = {
+      goto: vi.fn().mockResolvedValue(undefined),
       evaluate: vi.fn().mockResolvedValue({ ok: false, status: 500 }),
     } as any;
 
@@ -67,5 +74,36 @@ describe('zhihu question', () => {
       code: 'FETCH_ERROR',
       message: 'Zhihu question answers request failed with HTTP 500',
     });
+  });
+
+  it('surfaces browser-side fetch exceptions instead of HTTP unknown', async () => {
+    const cmd = getRegistry().get('zhihu/question');
+    expect(cmd?.func).toBeTypeOf('function');
+
+    const page = {
+      goto: vi.fn().mockResolvedValue(undefined),
+      evaluate: vi.fn().mockResolvedValue({ ok: false, status: 0, error: 'Failed to fetch' }),
+    } as any;
+
+    await expect(
+      cmd!.func!(page, { id: '2021881398772981878', limit: 3 }),
+    ).rejects.toMatchObject({
+      code: 'FETCH_ERROR',
+      message: 'Zhihu question answers request failed: Failed to fetch',
+    });
+  });
+
+  it('rejects non-numeric question IDs', async () => {
+    const cmd = getRegistry().get('zhihu/question');
+    expect(cmd?.func).toBeTypeOf('function');
+
+    const page = { goto: vi.fn(), evaluate: vi.fn() } as any;
+
+    await expect(
+      cmd!.func!(page, { id: "abc'; alert(1); //", limit: 1 }),
+    ).rejects.toBeInstanceOf(CliError);
+
+    expect(page.goto).not.toHaveBeenCalled();
+    expect(page.evaluate).not.toHaveBeenCalled();
   });
 });

@@ -14,45 +14,45 @@ cli({
   columns: ['rank', 'author', 'votes', 'content'],
   func: async (page, kwargs) => {
     const { id, limit = 5 } = kwargs;
+    const questionId = String(id);
+    if (!/^\d+$/.test(questionId)) {
+      throw new CliError('INVALID_INPUT', 'Question ID must be numeric', 'Example: opencli zhihu question 123456789');
+    }
     const answerLimit = Number(limit);
 
-    const stripHtml = (html: string) =>
-      (html || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim();
+    await page.goto(`https://www.zhihu.com/question/${questionId}`);
 
-    // Only fetch answers here. The question detail endpoint is not used by the
-    // current CLI output and can fail independently, which would incorrectly
-    // turn a successful answers response into a login error.
-    const result = await (page as any).evaluate(
-      async ({ questionId, answerLimit }: { questionId: string; answerLimit: number }) => {
-        const aResp = await fetch(
-          `https://www.zhihu.com/api/v4/questions/${questionId}/answers?limit=${answerLimit}&offset=0&sort_by=default&include=data[*].content,voteup_count,comment_count,author`,
-          { credentials: 'include' },
-        );
-        if (!aResp.ok) return { ok: false as const, status: aResp.status };
-        const a = await aResp.json();
-        return { ok: true as const, answers: Array.isArray(a?.data) ? a.data : [] };
-      },
-      { questionId: String(id), answerLimit },
-    );
+    const url = `https://www.zhihu.com/api/v4/questions/${questionId}/answers?limit=${answerLimit}&offset=0&sort_by=default&include=data[*].content,voteup_count,comment_count,author`;
+    const result: any = await page.evaluate(`(async () => {
+      const strip = (html) => (html || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim();
+      try {
+        const r = await fetch(${JSON.stringify(url)}, { credentials: 'include' });
+        if (!r.ok) return { ok: false, status: r.status };
+        const a = await r.json();
+        const answers = (a?.data || []).map((item, i) => ({
+          rank: i + 1,
+          author: item.author?.name || 'anonymous',
+          votes: item.voteup_count || 0,
+          content: strip(item.content || '').substring(0, 200),
+        }));
+        return { ok: true, answers };
+      } catch (e) {
+        return { ok: false, status: 0, error: e instanceof Error ? e.message : String(e) };
+      }
+    })()`);
 
     if (!result?.ok) {
       if (result?.status === 401 || result?.status === 403) {
         throw new AuthRequiredError('www.zhihu.com', 'Failed to fetch question data from Zhihu');
       }
+      const detail = result?.status > 0 ? ` with HTTP ${result.status}` : (result?.error ? `: ${result.error}` : '');
       throw new CliError(
         'FETCH_ERROR',
-        `Zhihu question answers request failed with HTTP ${result?.status ?? 'unknown'}`,
+        `Zhihu question answers request failed${detail}`,
         'Try again later or rerun with -v for more detail',
       );
     }
 
-    const answers = result.answers.slice(0, answerLimit).map((a: any, i: number) => ({
-      rank: i + 1,
-      author: a.author?.name ?? 'anonymous',
-      votes: a.voteup_count ?? 0,
-      content: stripHtml(a.content ?? '').slice(0, 200),
-    }));
-
-    return answers;
+    return result.answers;
   },
 });
