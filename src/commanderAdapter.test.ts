@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Command } from 'commander';
 import type { CliCommand } from './registry.js';
+import { EmptyResultError, SelectorError } from './errors.js';
 
 const { mockExecuteCommand, mockRenderOutput } = vi.hoisted(() => ({
   mockExecuteCommand: vi.fn(),
@@ -124,6 +125,57 @@ describe('commanderAdapter boolean alias support', () => {
   });
 });
 
+describe('commanderAdapter value-required optional options', () => {
+  const cmd: CliCommand = {
+    site: 'instagram',
+    name: 'post',
+    description: 'Post to Instagram',
+    browser: true,
+    args: [
+      { name: 'image', valueRequired: true, help: 'Single image path' },
+      { name: 'images', valueRequired: true, help: 'Comma-separated image paths' },
+      { name: 'content', positional: true, required: false, help: 'Caption text' },
+    ],
+    validateArgs: (kwargs) => {
+      if (!kwargs.image && !kwargs.images) {
+        throw new Error('media required');
+      }
+    },
+    func: vi.fn(),
+  };
+
+  beforeEach(() => {
+    mockExecuteCommand.mockReset();
+    mockExecuteCommand.mockResolvedValue([]);
+    mockRenderOutput.mockReset();
+    delete process.env.OPENCLI_VERBOSE;
+    process.exitCode = undefined;
+  });
+
+  it('requires a value when --image is present', async () => {
+    const program = new Command();
+    program.exitOverride();
+    const siteCmd = program.command('instagram');
+    registerCommandToProgram(siteCmd, cmd);
+
+    await expect(
+      program.parseAsync(['node', 'opencli', 'instagram', 'post', '--image']),
+    ).rejects.toMatchObject({ code: 'commander.optionMissingArgument' });
+    expect(mockExecuteCommand).not.toHaveBeenCalled();
+  });
+
+  it('runs validateArgs before executeCommand so missing media does not dispatch the browser command', async () => {
+    const program = new Command();
+    const siteCmd = program.command('instagram');
+    registerCommandToProgram(siteCmd, cmd);
+
+    await program.parseAsync(['node', 'opencli', 'instagram', 'post', 'caption only']);
+
+    expect(mockExecuteCommand).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeDefined();
+  });
+});
+
 describe('commanderAdapter command aliases', () => {
   const cmd: CliCommand = {
     site: 'notebooklm',
@@ -151,5 +203,113 @@ describe('commanderAdapter command aliases', () => {
     await program.parseAsync(['node', 'opencli', 'notebooklm', 'metadata']);
 
     expect(mockExecuteCommand).toHaveBeenCalledWith(cmd, {}, false);
+  });
+});
+
+describe('commanderAdapter default formats', () => {
+  const cmd: CliCommand = {
+    site: 'gemini',
+    name: 'ask',
+    description: 'Ask Gemini',
+    browser: false,
+    args: [],
+    columns: ['response'],
+    defaultFormat: 'plain',
+    func: vi.fn(),
+  };
+
+  beforeEach(() => {
+    mockExecuteCommand.mockReset();
+    mockExecuteCommand.mockResolvedValue([{ response: 'hello' }]);
+    mockRenderOutput.mockReset();
+    delete process.env.OPENCLI_VERBOSE;
+    process.exitCode = undefined;
+  });
+
+  it('uses the command defaultFormat when the user keeps the default table format', async () => {
+    const program = new Command();
+    const siteCmd = program.command('gemini');
+    registerCommandToProgram(siteCmd, cmd);
+
+    await program.parseAsync(['node', 'opencli', 'gemini', 'ask']);
+
+    expect(mockRenderOutput).toHaveBeenCalledWith(
+      [{ response: 'hello' }],
+      expect.objectContaining({ fmt: 'plain' }),
+    );
+  });
+
+  it('respects an explicit user format over the command defaultFormat', async () => {
+    const program = new Command();
+    const siteCmd = program.command('gemini');
+    registerCommandToProgram(siteCmd, cmd);
+
+    await program.parseAsync(['node', 'opencli', 'gemini', 'ask', '--format', 'json']);
+
+    expect(mockRenderOutput).toHaveBeenCalledWith(
+      [{ response: 'hello' }],
+      expect.objectContaining({ fmt: 'json' }),
+    );
+  });
+});
+
+describe('commanderAdapter empty result hints', () => {
+  const cmd: CliCommand = {
+    site: 'xiaohongshu',
+    name: 'note',
+    description: 'Read one note',
+    browser: false,
+    args: [
+      { name: 'note-id', positional: true, required: true, help: 'Note ID' },
+    ],
+    func: vi.fn(),
+  };
+
+  beforeEach(() => {
+    mockExecuteCommand.mockReset();
+    mockRenderOutput.mockReset();
+    delete process.env.OPENCLI_VERBOSE;
+    process.exitCode = undefined;
+  });
+
+  it('prints the adapter hint instead of the generic outdated-adapter message', async () => {
+    const program = new Command();
+    const siteCmd = program.command('xiaohongshu');
+    registerCommandToProgram(siteCmd, cmd);
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockExecuteCommand.mockRejectedValueOnce(
+      new EmptyResultError(
+        'xiaohongshu/note',
+        'Pass the full search_result URL with xsec_token instead of a bare note ID.',
+      ),
+    );
+
+    await program.parseAsync(['node', 'opencli', 'xiaohongshu', 'note', '69ca3927000000001a020fd5']);
+
+    const output = errorSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('xsec_token');
+    expect(output).not.toContain('this adapter may be outdated');
+
+    errorSpy.mockRestore();
+  });
+
+  it('prints selector-specific hints too', async () => {
+    const program = new Command();
+    const siteCmd = program.command('xiaohongshu');
+    registerCommandToProgram(siteCmd, cmd);
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockExecuteCommand.mockRejectedValueOnce(
+      new SelectorError('.note-title', 'The note title selector no longer matches the current page.'),
+    );
+
+    await program.parseAsync(['node', 'opencli', 'xiaohongshu', 'note', '69ca3927000000001a020fd5']);
+
+    const output = errorSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('selector no longer matches');
+    expect(output).not.toContain('this adapter may be outdated');
+
+    errorSpy.mockRestore();
   });
 });

@@ -17,8 +17,8 @@ import { getErrorMessage } from './errors.js';
 import { fullName, getRegistry, type CliCommand } from './registry.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CLIS_DIR = path.resolve(__dirname, 'clis');
-const OUTPUT = path.resolve(__dirname, '..', 'dist', 'cli-manifest.json');
+const CLIS_DIR = path.resolve(__dirname, '..', 'clis');
+const OUTPUT = path.resolve(__dirname, '..', 'cli-manifest.json');
 
 export interface ManifestEntry {
   site: string;
@@ -33,6 +33,7 @@ export interface ManifestEntry {
     type?: string;
     default?: unknown;
     required?: boolean;
+    valueRequired?: boolean;
     positional?: boolean;
     help?: string;
     choices?: string[];
@@ -62,6 +63,7 @@ function toManifestArgs(args: CliCommand['args']): ManifestEntry['args'] {
     type: arg.type ?? 'str',
     default: arg.default,
     required: !!arg.required,
+    valueRequired: !!arg.valueRequired || undefined,
     positional: arg.positional || undefined,
     help: arg.help ?? '',
     choices: arg.choices,
@@ -252,14 +254,15 @@ async function main(): Promise<void> {
   // entry-point loses its executable permission, causing "Permission denied".
   // See: https://github.com/jackwener/opencli/issues/446
   if (process.platform !== 'win32') {
-    const pkgPath = path.resolve(__dirname, '..', 'package.json');
+    const projectRoot = path.resolve(__dirname, '..', '..');
+    const pkgPath = path.resolve(projectRoot, 'package.json');
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
       const bins: Record<string, string> = typeof pkg.bin === 'string'
         ? { [pkg.name ?? 'cli']: pkg.bin }
         : pkg.bin ?? {};
       for (const binPath of Object.values(bins)) {
-        const abs = path.resolve(__dirname, '..', binPath);
+        const abs = path.resolve(projectRoot, binPath);
         if (fs.existsSync(abs)) {
           fs.chmodSync(abs, 0o755);
           console.log(`✅ Restored executable permission: ${binPath}`);

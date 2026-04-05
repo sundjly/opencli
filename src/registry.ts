@@ -17,6 +17,7 @@ export interface Arg {
   type?: string;
   default?: unknown;
   required?: boolean;
+  valueRequired?: boolean;
   positional?: boolean;
   help?: string;
   choices?: string[];
@@ -47,6 +48,7 @@ export interface CliCommand {
   source?: string;
   footerExtra?: (kwargs: CommandArgs) => string | undefined;
   requiredEnv?: RequiredEnv[];
+  validateArgs?: (kwargs: CommandArgs) => void;
   /** Deprecation note shown in help / execution warnings. */
   deprecated?: boolean | string;
   /** Preferred replacement command, if any. */
@@ -62,6 +64,8 @@ export interface CliCommand {
    * - `string`: navigate to this specific URL instead of the domain root
    */
   navigateBefore?: boolean | string;
+  /** Override the default CLI output format when the user does not pass -f/--format. */
+  defaultFormat?: 'table' | 'plain' | 'json' | 'yaml' | 'yml' | 'md' | 'markdown' | 'csv';
 }
 
 /** Internal extension for lazy-loaded TS modules (not exposed in public API) */
@@ -105,6 +109,7 @@ export function cli(opts: CliOptions): CliCommand {
     deprecated: opts.deprecated,
     replacedBy: opts.replacedBy,
     navigateBefore: opts.navigateBefore,
+    defaultFormat: opts.defaultFormat,
   };
 
   registerCommand(cmd);

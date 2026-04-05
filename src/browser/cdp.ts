@@ -223,14 +223,6 @@ class CDPPage extends BasePage {
     return [];
   }
 
-  async closeTab(_index?: number): Promise<void> {
-    // Not supported in direct CDP mode
-  }
-
-  async newTab(): Promise<void> {
-    await this.bridge.send('Target.createTarget', { url: 'about:blank' });
-  }
-
   async selectTab(_index: number): Promise<void> {
     // Not supported in direct CDP mode
   }
@@ -274,6 +266,7 @@ function scoreCDPTarget(target: CDPTarget, preferredPattern?: RegExp): number {
 
   if (!haystack.trim() && !type) return Number.NEGATIVE_INFINITY;
   if (haystack.includes('devtools')) return Number.NEGATIVE_INFINITY;
+  if (type === 'background_page' || type === 'service_worker') return Number.NEGATIVE_INFINITY;
 
   let score = 0;
 
