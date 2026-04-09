@@ -529,7 +529,7 @@ export function getCommitHash(dir: string): string | undefined {
 
 /**
  * Validate that a downloaded plugin directory is a structurally valid plugin.
- * Checks for at least one command file (.yaml, .yml, .ts, .js) and a valid
+ * Checks for at least one command file (.ts, .js) and a valid
  * package.json if it contains .ts files.
  */
 export function validatePluginStructure(pluginDir: string): ValidationResult {
@@ -540,12 +540,11 @@ export function validatePluginStructure(pluginDir: string): ValidationResult {
   }
 
   const files = fs.readdirSync(pluginDir);
-  const hasYaml = files.some(f => f.endsWith('.yaml') || f.endsWith('.yml'));
   const hasTs = files.some(f => f.endsWith('.ts') && !f.endsWith('.d.ts') && !f.endsWith('.test.ts'));
   const hasJs = files.some(f => f.endsWith('.js') && !f.endsWith('.d.js'));
 
-  if (!hasYaml && !hasTs && !hasJs) {
-    errors.push('No command files found in plugin directory. A plugin must contain at least one .yaml, .ts, or .js command file.');
+  if (!hasTs && !hasJs) {
+    errors.push('No command files found in plugin directory. A plugin must contain at least one .ts or .js command file.');
   }
 
   if (hasTs) {
@@ -1243,7 +1242,6 @@ function scanPluginCommands(dir: string): string[] {
     const names = new Set(
       files
         .filter(f =>
-          f.endsWith('.yaml') || f.endsWith('.yml') ||
           (f.endsWith('.ts') && !f.endsWith('.d.ts') && !f.endsWith('.test.ts')) ||
           (f.endsWith('.js') && !f.endsWith('.d.js'))
         )
@@ -1381,11 +1379,7 @@ function parseSource(
  */
 function linkHostOpencli(pluginDir: string): void {
   try {
-    // Determine the host opencli package root from this module's location.
-    // Both dev (tsx src/plugin.ts) and prod (node dist/plugin.js) are one level
-    // deep, so path.dirname + '..' always gives us the package root.
-    const thisFile = fileURLToPath(import.meta.url);
-    const hostRoot = path.resolve(path.dirname(thisFile), '..');
+    const hostRoot = resolveHostOpencliRoot();
 
     const targetLink = path.join(pluginDir, 'node_modules', '@jackwener', 'opencli');
 
@@ -1411,8 +1405,7 @@ function linkHostOpencli(pluginDir: string): void {
  * Resolve the path to the esbuild CLI executable with fallback strategies.
  */
 export function resolveEsbuildBin(): string | null {
-  const thisFile = fileURLToPath(import.meta.url);
-  const hostRoot = path.resolve(path.dirname(thisFile), '..');
+  const hostRoot = resolveHostOpencliRoot();
 
   // Strategy 1 (Windows): prefer the .cmd wrapper which is executable via shell
   if (isWindows) {
@@ -1466,6 +1459,30 @@ export function resolveEsbuildBin(): string | null {
   return null;
 }
 
+function resolveHostOpencliRoot(startFile = fileURLToPath(import.meta.url)): string {
+  let dir = path.dirname(startFile);
+
+  while (true) {
+    const pkgPath = path.join(dir, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+        if (pkg?.name === '@jackwener/opencli') {
+          return dir;
+        }
+      } catch {
+        // Keep walking; a malformed package.json should not hide an ancestor package root.
+      }
+    }
+
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  return path.resolve(path.dirname(startFile), '..');
+}
+
 /**
  * Transpile TS plugin files to JS so they work in production mode.
  * Uses esbuild from the host opencli's node_modules for fast single-file transpilation.
@@ -1512,6 +1529,7 @@ function transpilePluginTs(pluginDir: string): void {
 }
 
 export {
+  resolveHostOpencliRoot as _resolveHostOpencliRoot,
   resolveEsbuildBin as _resolveEsbuildBin,
   getCommitHash as _getCommitHash,
   installDependencies as _installDependencies,

@@ -30,7 +30,8 @@ import {
   AdapterLoadError,
   CommandExecutionError,
 } from './errors.js';
-import { checkDaemonStatus } from './browser/discover.js';
+import { getDaemonHealth } from './browser/daemon-client.js';
+import { isDiagnosticEnabled } from './diagnostic.js';
 
 export function normalizeArgValue(argType: string | undefined, value: unknown, name: string): unknown {
   if (argType !== 'bool' && argType !== 'boolean') return value;
@@ -192,17 +193,25 @@ function renderBridgeStatus(running: boolean, extensionConnected: boolean): void
   }
 }
 
+/** Emit AutoFix hint for repairable adapter errors (skipped if already in diagnostic mode). */
+function emitAutoFixHint(cmdName: string): void {
+  if (isDiagnosticEnabled()) return; // Already collecting diagnostics, don't repeat
+  console.error();
+  console.error(chalk.cyan('💡 AutoFix: re-run with OPENCLI_DIAGNOSTIC=1 for repair context.'));
+  console.error(chalk.dim(`    OPENCLI_DIAGNOSTIC=1 ${cmdName}`));
+}
+
 async function renderError(err: unknown, cmdName: string, verbose: boolean): Promise<void> {
   // ── BrowserConnectError: real-time diagnosis, kind as fallback ────────
   if (err instanceof BrowserConnectError) {
-    console.error(chalk.red('🔌 Browser Bridge not connected'));
+    console.error(chalk.red(`🔌 ${err.message}`));
+    if (err.hint) console.error(chalk.yellow(`→ ${err.hint}`));
     console.error();
     try {
-      // 300ms matches execution.ts — localhost responds in <50ms when running.
-      const status = await checkDaemonStatus({ timeout: 300 });
-      renderBridgeStatus(status.running, status.extensionConnected);
+      const health = await getDaemonHealth({ timeout: 300 });
+      renderBridgeStatus(health.state !== 'stopped', health.state === 'ready');
     } catch (_statusErr) {
-      // checkDaemonStatus itself failed — derive best-guess state from kind.
+      // getDaemonHealth itself failed — derive best-guess state from kind.
       const running = err.kind !== 'daemon-not-running';
       const extensionConnected = err.kind === 'command-failed';
       renderBridgeStatus(running, extensionConnected);
@@ -233,6 +242,7 @@ async function renderError(err: unknown, cmdName: string, verbose: boolean): Pro
     console.error(chalk.yellow(`→ ${err.hint ?? 'The page structure may have changed — this adapter may be outdated.'}`));
     console.error(chalk.dim(`  Debug:  ${cmdName} --verbose`));
     console.error(chalk.dim(`  Report: ${ISSUES_URL}`));
+    emitAutoFixHint(cmdName);
     return;
   }
 
@@ -277,6 +287,7 @@ async function renderError(err: unknown, cmdName: string, verbose: boolean): Pro
     console.error(chalk.red(`${classified.icon} ${msg}`));
     console.error(chalk.yellow(`→ ${classified.hint}`));
     if (classified.kind === 'not-found') console.error(chalk.dim(`  Report: ${ISSUES_URL}`));
+    if (classified.kind === 'not-found') emitAutoFixHint(cmdName);
     return;
   }
 

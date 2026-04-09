@@ -1,11 +1,10 @@
 /**
  * Synthesize candidate CLIs from explore artifacts.
- * Generates evaluate-based YAML pipelines (matching hand-written adapter patterns).
+ * Generates evaluate-based pipelines (matching hand-written adapter patterns).
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import yaml from 'js-yaml';
 import { VOLATILE_PARAMS, SEARCH_PARAMS, LIMIT_PARAMS, PAGINATION_PARAMS } from './constants.js';
 import type { ExploreAuthSummary, ExploreEndpointArtifact, ExploreManifest } from './explore.js';
 
@@ -26,7 +25,6 @@ export interface SynthesizeCapability {
   name: string;
   description: string;
   strategy: string;
-  confidence?: number;
   endpoint?: string;
   itemPath?: string | null;
   recommendedColumns?: string[];
@@ -67,7 +65,6 @@ export interface SynthesizeCandidateSummary {
   name: string;
   path: string;
   strategy: string;
-  confidence?: number;
 }
 
 export interface SynthesizeResult {
@@ -98,7 +95,6 @@ export function synthesizeFromExplore(
 
   const site = bundle.manifest.site;
   const capabilities = (bundle.capabilities ?? [])
-    .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
     .slice(0, opts.top ?? 3);
   const candidates: SynthesizeCandidateSummary[] = [];
 
@@ -106,9 +102,9 @@ export function synthesizeFromExplore(
     const endpoint = chooseEndpoint(cap, bundle.endpoints);
     if (!endpoint) continue;
     const candidate = buildCandidateYaml(site, bundle.manifest, cap, endpoint);
-    const filePath = path.join(targetDir, `${candidate.name}.yaml`);
-    fs.writeFileSync(filePath, yaml.dump(candidate.yaml, { sortKeys: false, lineWidth: 120 }));
-    candidates.push({ name: candidate.name, path: filePath, strategy: cap.strategy, confidence: cap.confidence });
+    const filePath = path.join(targetDir, `${candidate.name}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(candidate.yaml, null, 2));
+    candidates.push({ name: candidate.name, path: filePath, strategy: cap.strategy });
   }
 
   const index = { site, target_url: bundle.manifest.target_url, generated_from: exploreDir, candidate_count: candidates.length, candidates };
@@ -119,7 +115,7 @@ export function synthesizeFromExplore(
 
 export function renderSynthesizeSummary(result: SynthesizeResult): string {
   const lines = ['opencli synthesize: OK', `Site: ${result.site}`, `Source: ${result.explore_dir}`, `Candidates: ${result.candidate_count}`];
-  for (const c of result.candidates ?? []) lines.push(`  • ${c.name} (${c.strategy}, ${((c.confidence ?? 0) * 100).toFixed(0)}% confidence) → ${c.path}`);
+  for (const c of result.candidates ?? []) lines.push(`  • ${c.name} (${c.strategy}) → ${c.path}`);
   return lines.join('\n');
 }
 
@@ -147,7 +143,12 @@ function chooseEndpoint(cap: SynthesizeCapability, endpoints: ExploreEndpointArt
     const match = endpoints.find((endpoint) => endpoint.pattern === endpointPattern || endpoint.url?.includes(endpointPattern));
     if (match) return match;
   }
-  return [...endpoints].sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
+  // Fallback: prefer endpoint with most data (item count + detected fields)
+  return [...endpoints].sort((a, b) => {
+    const aKey = (a.itemCount ?? 0) * 10 + Object.keys(a.detectedFields ?? {}).length;
+    const bKey = (b.itemCount ?? 0) * 10 + Object.keys(b.detectedFields ?? {}).length;
+    return bKey - aKey;
+  })[0];
 }
 
 // ── URL templating ─────────────────────────────────────────────────────────
@@ -173,7 +174,7 @@ function buildTemplatedUrl(rawUrl: string, cap: SynthesizeCapability, _endpoint:
 
 /**
  * Build inline evaluate script for browser-based fetch+parse.
- * Follows patterns from bilibili/hot.yaml and twitter/trending.yaml.
+ * Follows patterns from bilibili/hot.ts and twitter/trending.ts.
  */
 function buildEvaluateScript(url: string, itemPath: string, endpoint: ExploreEndpointArtifact): string {
   const pathChain = itemPath.split('.').map((p: string) => `?.${p}`).join('');
@@ -199,7 +200,7 @@ function buildEvaluateScript(url: string, itemPath: string, endpoint: ExploreEnd
   ].join('\n');
 }
 
-// ── YAML pipeline generation ───────────────────────────────────────────────
+// ── Pipeline generation ────────────────────────────────────────────────────
 
 function buildCandidateYaml(site: string, manifest: ExploreManifestLike, cap: SynthesizeCapability, endpoint: ExploreEndpointArtifact): { name: string; yaml: CandidateYaml } {
   const needsBrowser = cap.strategy !== 'public';
@@ -231,12 +232,12 @@ function buildCandidateYaml(site: string, manifest: ExploreManifestLike, cap: Sy
     if (cap.itemPath) tapStep.select = cap.itemPath;
     pipeline.push({ tap: tapStep });
   } else if (needsBrowser) {
-    // Browser-based: navigate + evaluate (like bilibili/hot.yaml, twitter/trending.yaml)
+    // Browser-based: navigate + evaluate (like bilibili/hot, twitter/trending)
     pipeline.push({ navigate: manifest.target_url });
     const itemPath = cap.itemPath ?? 'data.data.list';
     pipeline.push({ evaluate: buildEvaluateScript(templatedUrl, itemPath, endpoint) });
   } else {
-    // Public API: direct fetch (like hackernews/top.yaml)
+    // Public API: direct fetch (like hackernews/top)
     pipeline.push({ fetch: { url: templatedUrl } });
     if (cap.itemPath) pipeline.push({ select: cap.itemPath });
   }

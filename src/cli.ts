@@ -24,11 +24,11 @@ import { daemonStatus, daemonStop, daemonRestart } from './commands/daemon.js';
 
 const CLI_FILE = fileURLToPath(import.meta.url);
 
-/** Create a browser page for operate commands. Uses 'operate' workspace for session persistence. */
-async function getOperatePage(): Promise<import('./types.js').IPage> {
+/** Create a browser page for browser commands. Uses a dedicated browser workspace for session persistence. */
+async function getBrowserPage(): Promise<import('./types.js').IPage> {
   const { BrowserBridge } = await import('./browser/index.js');
   const bridge = new BrowserBridge();
-  return bridge.connect({ timeout: 30, workspace: 'operate:default' });
+  return bridge.connect({ timeout: 30, workspace: 'browser:default' });
 }
 
 function applyVerbose(opts: { verbose?: boolean }): void {
@@ -196,28 +196,34 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
 
   program
     .command('generate')
-    .description('One-shot: explore → synthesize → register')
+    .description('One-shot: explore → synthesize → verify → register')
     .argument('<url>')
     .option('--goal <text>')
     .option('--site <name>')
+    .option('--format <fmt>', 'Output format: table, json', 'table')
+    .option('--no-register', 'Verify the generated adapter without registering it')
     .option('-v, --verbose', 'Debug output')
     .action(async (url: string, opts: {
       goal?: string;
       site?: string;
+      format?: string;
+      register?: boolean;
       verbose?: boolean;
     }) => {
       applyVerbose(opts);
-      const { generateCliFromUrl, renderGenerateSummary } = await import('./generate.js');
+      const { generateVerifiedFromUrl, renderGenerateVerifiedSummary } = await import('./generate-verified.js');
       const workspace = `generate:${inferHost(url, opts.site)}`;
-      const r = await generateCliFromUrl({
+      const r = await generateVerifiedFromUrl({
         url,
         BrowserFactory: getBrowserFactory(),
         goal: opts.goal,
         site: opts.site,
         workspace,
+        noRegister: opts.register === false,
       });
-      console.log(renderGenerateSummary(r));
-      process.exitCode = r.ok ? EXIT_CODES.SUCCESS : EXIT_CODES.GENERIC_ERROR;
+      if (opts.format === 'json') console.log(JSON.stringify(r, null, 2));
+      else console.log(renderGenerateVerifiedSummary(r));
+      process.exitCode = r.status === 'success' ? EXIT_CODES.SUCCESS : EXIT_CODES.GENERIC_ERROR;
     });
 
   // ── Built-in: record ─────────────────────────────────────────────────────
@@ -276,23 +282,23 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
       console.log(renderCascadeResult(result));
     });
 
-  // ── Built-in: operate (browser control for Claude Code skill) ───────────────
+  // ── Built-in: browser (browser control for Claude Code skill) ───────────────
   //
   // Make websites accessible for AI agents.
-  // All commands wrapped in operateAction() for consistent error handling.
+  // All commands wrapped in browserAction() for consistent error handling.
 
-  const operate = program
-    .command('operate')
+  const browser = program
+    .command('browser')
     .description('Browser control — navigate, click, type, extract, wait (no LLM needed)');
 
-  /** Wrap operate actions with error handling and optional --json output */
-  function operateAction(fn: (page: Awaited<ReturnType<typeof getOperatePage>>, ...args: any[]) => Promise<unknown>) {
+  /** Wrap browser actions with error handling and optional --json output */
+  function browserAction(fn: (page: Awaited<ReturnType<typeof getBrowserPage>>, ...args: any[]) => Promise<unknown>) {
     return async (...args: any[]) => {
       try {
-        const page = await getOperatePage();
+        const page = await getBrowserPage();
         await fn(page, ...args);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = getErrorMessage(err);
         if (msg.includes('Extension not connected') || msg.includes('Daemon')) {
           console.error(`Browser not connected. Run 'opencli doctor' to diagnose.`);
         } else if (msg.includes('attach failed') || msg.includes('chrome-extension://')) {
@@ -310,25 +316,29 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
   /** Network interceptor JS — injected on every open/navigate to capture fetch/XHR */
   const NETWORK_INTERCEPTOR_JS = `(function(){if(window.__opencli_net)return;window.__opencli_net=[];var M=200,B=50000,F=window.fetch;window.fetch=async function(){var r=await F.apply(this,arguments);try{var ct=r.headers.get('content-type')||'';if(ct.includes('json')||ct.includes('text')){var c=r.clone(),t=await c.text();if(window.__opencli_net.length<M){var b=null;if(t.length<=B)try{b=JSON.parse(t)}catch(e){b=t}window.__opencli_net.push({url:r.url||(arguments[0]&&arguments[0].url)||String(arguments[0]),method:(arguments[1]&&arguments[1].method)||'GET',status:r.status,size:t.length,ct:ct,body:b})}}}catch(e){}return r};var X=XMLHttpRequest.prototype,O=X.open,S=X.send;X.open=function(m,u){this._om=m;this._ou=u;return O.apply(this,arguments)};X.send=function(){var x=this;x.addEventListener('load',function(){try{var ct=x.getResponseHeader('content-type')||'';if((ct.includes('json')||ct.includes('text'))&&window.__opencli_net.length<M){var t=x.responseText,b=null;if(t&&t.length<=B)try{b=JSON.parse(t)}catch(e){b=t}window.__opencli_net.push({url:x._ou,method:x._om||'GET',status:x.status,size:t?t.length:0,ct:ct,body:b})}}catch(e){}});return S.apply(this,arguments)}})()`;
 
-  operate.command('open').argument('<url>').description('Open URL in automation window')
-    .action(operateAction(async (page, url) => {
+  browser.command('open').argument('<url>').description('Open URL in automation window')
+    .action(browserAction(async (page, url) => {
+      // Start session-level capture before navigation (catches initial requests)
+      const hasSessionCapture = await page.startNetworkCapture?.().then(() => true).catch(() => false);
       await page.goto(url);
       await page.wait(2);
-      // Auto-inject network interceptor for API discovery
-      try { await page.evaluate(NETWORK_INTERCEPTOR_JS); } catch { /* non-fatal */ }
+      // Fallback: inject JS interceptor when session capture is unavailable
+      if (!hasSessionCapture) {
+        try { await page.evaluate(NETWORK_INTERCEPTOR_JS); } catch { /* non-fatal */ }
+      }
       console.log(`Navigated to: ${await page.getCurrentUrl?.() ?? url}`);
     }));
 
-  operate.command('back').description('Go back in browser history')
-    .action(operateAction(async (page) => {
+  browser.command('back').description('Go back in browser history')
+    .action(browserAction(async (page) => {
       await page.evaluate('history.back()');
       await page.wait(2);
       console.log('Navigated back');
     }));
 
-  operate.command('scroll').argument('<direction>', 'up or down').option('--amount <pixels>', 'Pixels to scroll', '500')
+  browser.command('scroll').argument('<direction>', 'up or down').option('--amount <pixels>', 'Pixels to scroll', '500')
     .description('Scroll page')
-    .action(operateAction(async (page, direction, opts) => {
+    .action(browserAction(async (page, direction, opts) => {
       if (direction !== 'up' && direction !== 'down') {
         console.error(`Invalid direction "${direction}". Use "up" or "down".`);
         process.exitCode = EXIT_CODES.USAGE_ERROR;
@@ -340,17 +350,17 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
 
   // ── Inspect ──
 
-  operate.command('state').description('Page state: URL, title, interactive elements with [N] indices')
-    .action(operateAction(async (page) => {
+  browser.command('state').description('Page state: URL, title, interactive elements with [N] indices')
+    .action(browserAction(async (page) => {
       const snapshot = await page.snapshot({ viewportExpand: 2000 });
       const url = await page.getCurrentUrl?.() ?? '';
       console.log(`URL: ${url}\n`);
       console.log(typeof snapshot === 'string' ? snapshot : JSON.stringify(snapshot, null, 2));
     }));
 
-  operate.command('screenshot').argument('[path]', 'Save to file (base64 if omitted)')
+  browser.command('screenshot').argument('[path]', 'Save to file (base64 if omitted)')
     .description('Take screenshot')
-    .action(operateAction(async (page, path) => {
+    .action(browserAction(async (page, path) => {
       if (path) {
         await page.screenshot({ path });
         console.log(`Screenshot saved to: ${path}`);
@@ -361,54 +371,54 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
 
   // ── Get commands (structured data extraction) ──
 
-  const get = operate.command('get').description('Get page properties');
+  const get = browser.command('get').description('Get page properties');
 
   get.command('title').description('Page title')
-    .action(operateAction(async (page) => {
+    .action(browserAction(async (page) => {
       console.log(await page.evaluate('document.title'));
     }));
 
   get.command('url').description('Current page URL')
-    .action(operateAction(async (page) => {
+    .action(browserAction(async (page) => {
       console.log(await page.getCurrentUrl?.() ?? await page.evaluate('location.href'));
     }));
 
   get.command('text').argument('<index>', 'Element index').description('Element text content')
-    .action(operateAction(async (page, index) => {
+    .action(browserAction(async (page, index) => {
       const text = await page.evaluate(`document.querySelector('[data-opencli-ref="${index}"]')?.textContent?.trim()`);
       console.log(text ?? '(empty)');
     }));
 
   get.command('value').argument('<index>', 'Element index').description('Input/textarea value')
-    .action(operateAction(async (page, index) => {
+    .action(browserAction(async (page, index) => {
       const val = await page.evaluate(`document.querySelector('[data-opencli-ref="${index}"]')?.value`);
       console.log(val ?? '(empty)');
     }));
 
   get.command('html').option('--selector <css>', 'CSS selector scope').description('Page HTML (or scoped)')
-    .action(operateAction(async (page, opts) => {
+    .action(browserAction(async (page, opts) => {
       const sel = opts.selector ? JSON.stringify(opts.selector) : 'null';
       const html = await page.evaluate(`(${sel} ? document.querySelector(${sel})?.outerHTML : document.documentElement.outerHTML)?.slice(0, 50000)`);
       console.log(html ?? '(empty)');
     }));
 
   get.command('attributes').argument('<index>', 'Element index').description('Element attributes')
-    .action(operateAction(async (page, index) => {
+    .action(browserAction(async (page, index) => {
       const attrs = await page.evaluate(`JSON.stringify(Object.fromEntries([...document.querySelector('[data-opencli-ref="${index}"]')?.attributes].map(a=>[a.name,a.value])))`);
       console.log(attrs ?? '{}');
     }));
 
   // ── Interact ──
 
-  operate.command('click').argument('<index>', 'Element index from state').description('Click element by index')
-    .action(operateAction(async (page, index) => {
+  browser.command('click').argument('<index>', 'Element index from state').description('Click element by index')
+    .action(browserAction(async (page, index) => {
       await page.click(index);
       console.log(`Clicked element [${index}]`);
     }));
 
-  operate.command('type').argument('<index>', 'Element index').argument('<text>', 'Text to type')
+  browser.command('type').argument('<index>', 'Element index').argument('<text>', 'Text to type')
     .description('Click element, then type text')
-    .action(operateAction(async (page, index, text) => {
+    .action(browserAction(async (page, index, text) => {
       await page.click(index);
       await page.wait(0.3);
       await page.typeText(index, text);
@@ -431,9 +441,9 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
       }
     }));
 
-  operate.command('select').argument('<index>', 'Element index of <select>').argument('<option>', 'Option text')
+  browser.command('select').argument('<index>', 'Element index of <select>').argument('<option>', 'Option text')
     .description('Select dropdown option')
-    .action(operateAction(async (page, index, option) => {
+    .action(browserAction(async (page, index, option) => {
       const result = await page.evaluate(`
         (function() {
           var sel = document.querySelector('[data-opencli-ref="${index}"]');
@@ -455,21 +465,21 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
       }
     }));
 
-  operate.command('keys').argument('<key>', 'Key to press (Enter, Escape, Tab, Control+a)')
+  browser.command('keys').argument('<key>', 'Key to press (Enter, Escape, Tab, Control+a)')
     .description('Press keyboard key')
-    .action(operateAction(async (page, key) => {
+    .action(browserAction(async (page, key) => {
       await page.pressKey(key);
       console.log(`Pressed: ${key}`);
     }));
 
   // ── Wait commands ──
 
-  operate.command('wait')
+  browser.command('wait')
     .argument('<type>', 'selector, text, or time')
     .argument('[value]', 'CSS selector, text string, or seconds')
     .option('--timeout <ms>', 'Timeout in milliseconds', '10000')
     .description('Wait for selector, text, or time (e.g. wait selector ".loaded", wait text "Success", wait time 3)')
-    .action(operateAction(async (page, type, value, opts) => {
+    .action(browserAction(async (page, type, value, opts) => {
       const timeout = parseInt(opts.timeout, 10);
       if (type === 'time') {
         const seconds = parseFloat(value ?? '2');
@@ -491,8 +501,8 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
 
   // ── Extract ──
 
-  operate.command('eval').argument('<js>', 'JavaScript code').description('Execute JS in page context, return result')
-    .action(operateAction(async (page, js) => {
+  browser.command('eval').argument('<js>', 'JavaScript code').description('Execute JS in page context, return result')
+    .action(browserAction(async (page, js) => {
       const result = await page.evaluate(js);
       if (typeof result === 'string') console.log(result);
       else console.log(JSON.stringify(result, null, 2));
@@ -500,18 +510,40 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
 
   // ── Network (API discovery) ──
 
-  operate.command('network')
+  browser.command('network')
     .option('--detail <index>', 'Show full response body of request at index')
     .option('--all', 'Show all requests including static resources')
     .description('Show captured network requests (auto-captured since last open)')
-    .action(operateAction(async (page, opts) => {
-      const requests = await page.evaluate(`(function(){
-        var reqs = window.__opencli_net || [];
-        return JSON.stringify(reqs);
-      })()`) as string;
-
+    .action(browserAction(async (page, opts) => {
       let items: Array<{ url: string; method: string; status: number; size: number; ct: string; body: unknown }> = [];
-      try { items = JSON.parse(requests); } catch { console.log('No network data captured. Run "operate open <url>" first.'); return; }
+      if (page.readNetworkCapture) {
+        const raw = await page.readNetworkCapture();
+        // Normalize daemon/CDP capture entries to __opencli_net shape.
+        // Daemon returns: responseStatus, responseContentType, responsePreview
+        // CDP returns the same shape after PR A fix.
+        items = (raw as Array<Record<string, unknown>>).map(e => {
+          const preview = (e.responsePreview as string) ?? null;
+          let body: unknown = null;
+          if (preview) {
+            try { body = JSON.parse(preview); } catch { body = preview; }
+          }
+          return {
+            url: (e.url as string) || '',
+            method: (e.method as string) || 'GET',
+            status: (e.responseStatus as number) || 0,
+            size: preview ? preview.length : 0,
+            ct: (e.responseContentType as string) || '',
+            body,
+          };
+        });
+      } else {
+        // Fallback to JS interceptor data
+        const requests = await page.evaluate(`(function(){
+          var reqs = window.__opencli_net || [];
+          return JSON.stringify(reqs);
+        })()`) as string;
+        try { items = JSON.parse(requests); } catch { console.log('No network data captured. Run "browser open <url>" first.'); return; }
+      }
 
       if (items.length === 0) { console.log('No requests captured.'); return; }
 
@@ -545,7 +577,7 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
 
   // ── Init (adapter scaffolding) ──
 
-  operate.command('init')
+  browser.command('init')
     .argument('<name>', 'Adapter name in site/command format (e.g. hn/top)')
     .description('Generate adapter scaffold in ~/.opencli/clis/')
     .action(async (name: string) => {
@@ -574,10 +606,10 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
           return;
         }
 
-        // Try to detect domain from last operate session
+        // Try to detect domain from the last browser session
         let domain = site;
         try {
-          const page = await getOperatePage();
+          const page = await getBrowserPage();
           const url = await page.getCurrentUrl?.();
           if (url) { try { domain = new URL(url).hostname; } catch {} }
         } catch { /* no active session */ }
@@ -606,7 +638,7 @@ cli({
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(filePath, template, 'utf-8');
         console.log(`Created: ${filePath}`);
-        console.log(`Edit the file to implement your adapter, then run: opencli operate verify ${name}`);
+        console.log(`Edit the file to implement your adapter, then run: opencli browser verify ${name}`);
       } catch (err) {
         console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
         process.exitCode = EXIT_CODES.GENERIC_ERROR;
@@ -615,7 +647,7 @@ cli({
 
   // ── Verify (test adapter) ──
 
-  operate.command('verify')
+  browser.command('verify')
     .argument('<name>', 'Adapter name in site/command format (e.g. hn/top)')
     .description('Execute an adapter and show results')
     .action(async (name: string) => {
@@ -634,7 +666,7 @@ cli({
         const filePath = path.join(os.homedir(), '.opencli', 'clis', site, `${command}.ts`);
         if (!fs.existsSync(filePath)) {
           console.error(`Adapter not found: ${filePath}`);
-          console.error(`Run "opencli operate init ${name}" to create it.`);
+          console.error(`Run "opencli browser init ${name}" to create it.`);
           process.exitCode = EXIT_CODES.GENERIC_ERROR;
           return;
         }
@@ -647,7 +679,7 @@ cli({
         const hasLimitArg = /['"]limit['"]/.test(adapterSrc);
         const limitFlag = hasLimitArg ? ' --limit 3' : '';
         const limitArgs = hasLimitArg ? ['--limit', '3'] : [];
-        const invocation = resolveOperateVerifyInvocation();
+        const invocation = resolveBrowserVerifyInvocation();
 
         try {
           const output = execFileSync(invocation.binary, [...invocation.args, site, command, ...limitArgs], {
@@ -661,10 +693,12 @@ cli({
           console.log(`  Executing: opencli ${site} ${command}${limitFlag}\n`);
           console.log(output);
           console.log(`\n  ✓ Adapter works!`);
-        } catch (err: any) {
+        } catch (err) {
           console.log(`  Executing: opencli ${site} ${command}${limitFlag}\n`);
-          if (err.stdout) console.log(err.stdout);
-          if (err.stderr) console.error(err.stderr.slice(0, 500));
+          // execFileSync attaches captured stdout/stderr on its thrown Error.
+          const execErr = err as { stdout?: string | Buffer; stderr?: string | Buffer };
+          if (execErr.stdout) console.log(String(execErr.stdout));
+          if (execErr.stderr) console.error(String(execErr.stderr).slice(0, 500));
           console.log(`\n  ✗ Adapter failed. Fix the code and try again.`);
           process.exitCode = EXIT_CODES.GENERIC_ERROR;
         }
@@ -676,8 +710,8 @@ cli({
 
   // ── Session ──
 
-  operate.command('close').description('Close the automation window')
-    .action(operateAction(async (page) => {
+  browser.command('close').description('Close the automation window')
+    .action(browserAction(async (page) => {
       await page.closeWindow?.();
       console.log('Automation window closed');
     }));
@@ -1010,7 +1044,7 @@ export function runCli(BUILTIN_CLIS: string, USER_CLIS: string): void {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-export interface OperateVerifyInvocation {
+export interface BrowserVerifyInvocation {
   binary: string;
   args: string[];
   cwd: string;
@@ -1019,12 +1053,12 @@ export interface OperateVerifyInvocation {
 
 export { findPackageRoot };
 
-export function resolveOperateVerifyInvocation(opts: {
+export function resolveBrowserVerifyInvocation(opts: {
   projectRoot?: string;
   platform?: NodeJS.Platform;
   fileExists?: (path: string) => boolean;
   readFile?: (path: string) => string;
-} = {}): OperateVerifyInvocation {
+} = {}): BrowserVerifyInvocation {
   const platform = opts.platform ?? process.platform;
   const fileExists = opts.fileExists ?? fs.existsSync;
   const readFile = opts.readFile ?? ((filePath: string) => fs.readFileSync(filePath, 'utf-8'));

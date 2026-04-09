@@ -16,7 +16,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import chalk from 'chalk';
-import yaml from 'js-yaml';
+
 import { sendCommand } from './browser/daemon-client.js';
 import type { IPage } from './types.js';
 import { SEARCH_PARAMS, PAGINATION_PARAMS, FIELD_ROLES } from './constants.js';
@@ -27,6 +27,7 @@ import {
   inferStrategy,
   detectAuthFromContent,
   classifyQueryParams,
+  isNoiseUrl,
 } from './analysis.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -62,7 +63,6 @@ type RecordedCandidateKind = 'read' | 'write';
 export interface RecordedCandidate {
   kind: RecordedCandidateKind;
   req: RecordedRequest;
-  score: number;
   arrayResult: ReturnType<typeof findArrayPath> | null;
 }
 
@@ -73,20 +73,9 @@ interface GeneratedRecordedCandidate {
   yaml: unknown;
 }
 
-/** Keep the stronger candidate when multiple recordings share one bucket. */
-function preferRecordedCandidate(current: RecordedCandidate, next: RecordedCandidate): RecordedCandidate {
-  if (next.score > current.score) return next;
-  if (next.score < current.score) return current;
+/** Keep the later candidate when multiple recordings share one bucket (prefer fresher data). */
+function preferRecordedCandidate(_current: RecordedCandidate, next: RecordedCandidate): RecordedCandidate {
   return next;
-}
-
-/** Apply shared endpoint score tweaks. */
-function applyCommonEndpointScoreAdjustments(req: RecordedRequest, score: number): number {
-  let adjusted = score;
-  if (req.url.includes('/api/')) adjusted += 3;
-  if (req.url.match(/\/(track|log|analytics|beacon|pixel|stats|metric)/i)) adjusted -= 10;
-  if (req.url.match(/\/(ping|heartbeat|keep.?alive)/i)) adjusted -= 10;
-  return adjusted;
 }
 
 /** Build a candidate-level dedupe key. */
@@ -329,23 +318,6 @@ function generateReadRecordedJs(): string {
 
 // ── Analysis helpers ───────────────────────────────────────────────────────
 
-function scoreRequest(req: RecordedRequest, arrayResult: ReturnType<typeof findArrayPath> | null): number {
-  let s = 0;
-  if (arrayResult) {
-    s += 10;
-    s += Math.min(arrayResult.items.length, 10);
-    // Bonus for detected semantic fields
-    const sample = arrayResult.items[0];
-    if (sample && typeof sample === 'object') {
-      const keys = Object.keys(sample as object).map(k => k.toLowerCase());
-      for (const aliases of Object.values(FIELD_ROLES)) {
-        if (aliases.some(a => keys.includes(a))) s += 2;
-      }
-    }
-  }
-  return applyCommonEndpointScoreAdjustments(req, s);
-}
-
 /** Check whether one recorded request is safe to treat as a write candidate. */
 function isWriteCandidate(req: RecordedRequest): boolean {
   return ['POST', 'PUT', 'PATCH'].includes(req.method)
@@ -358,24 +330,18 @@ function isWriteCandidate(req: RecordedRequest): boolean {
     && !Array.isArray(req.responseBody);
 }
 
-/** Score replayable write requests while keeping tracking and heartbeat traffic suppressed. */
-function scoreWriteRequest(req: RecordedRequest): number {
-  return applyCommonEndpointScoreAdjustments(req, 6);
-}
-
-/** Analyze recorded requests into read and write candidates. */
+/** Analyze recorded requests into read and write candidates, filtering out noise. */
 export function analyzeRecordedRequests(requests: RecordedRequest[]): { candidates: RecordedCandidate[] } {
   const candidates: RecordedCandidate[] = [];
   for (const req of requests) {
+    if (isNoiseUrl(req.url)) continue;
     const arrayResult = findArrayPath(req.responseBody);
     if (isWriteCandidate(req)) {
-      const score = scoreWriteRequest(req);
-      if (score > 0) candidates.push({ kind: 'write', req, score, arrayResult: null });
+      candidates.push({ kind: 'write', req, arrayResult: null });
       continue;
     }
     if (arrayResult) {
-      const score = scoreRequest(req, arrayResult);
-      if (score > 0) candidates.push({ kind: 'read', req, score, arrayResult });
+      candidates.push({ kind: 'read', req, arrayResult });
     }
   }
   return { candidates };
@@ -547,9 +513,9 @@ export function generateRecordedCandidates(
     deduped.set(key, current ? preferRecordedCandidate(current, candidate) : candidate);
   }
 
+  // Sort reads by array item count (richer data first), then take top 5
   const selected = [...deduped.values()]
-    .filter((candidate) => candidate.kind === 'read' ? candidate.score >= 8 : candidate.score >= 6)
-    .sort((a, b) => b.score - a.score)
+    .sort((a, b) => (b.arrayResult?.items.length ?? 0) - (a.arrayResult?.items.length ?? 0))
     .slice(0, 5);
 
   const usedNames = new Set<string>();
@@ -587,8 +553,8 @@ export async function recordSession(opts: RecordOptions): Promise<RecordResult> 
   const pollMs = opts.pollMs ?? 2000;
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const allRequests: RecordedRequest[] = [];
-  // Track which tabIds have already had the interceptor injected
-  const injectedTabs = new Set<number>();
+  // Track which pages (targetIds) have already had the interceptor injected
+  const injectedPages = new Set<string>();
 
   // Infer site name from URL
   const site = opts.site ?? (() => {
@@ -615,10 +581,10 @@ export async function recordSession(opts: RecordOptions): Promise<RecordResult> 
     // Inject into initial tab
     const initialTabs = await listTabs(workspace);
     for (const tab of initialTabs) {
-      await injectIntoTab(workspace, tab.tabId, injectedTabs);
+      if (tab.page) await injectIntoPage(workspace, tab.page, injectedPages);
     }
 
-    console.log(chalk.bold('\n  Recording. Operate the page in the automation window.'));
+    console.log(chalk.bold('\n  Recording. Use the page in the browser automation window.'));
     console.log(chalk.dim(`  Will auto-stop after ${timeoutMs / 1000}s, or press Enter to stop now.\n`));
 
     // Race: Enter key vs timeout
@@ -639,15 +605,15 @@ export async function recordSession(opts: RecordOptions): Promise<RecordResult> 
         // Discover and inject into any new tabs
         const tabs = await listTabs(workspace);
         for (const tab of tabs) {
-          await injectIntoTab(workspace, tab.tabId, injectedTabs);
+          if (tab.page) await injectIntoPage(workspace, tab.page, injectedPages);
         }
 
-        // Drain captured data from all known tabs
-        for (const tabId of injectedTabs) {
-          const batch = await execOnTab(workspace, tabId, generateReadRecordedJs()) as RecordedRequest[] | null;
+        // Drain captured data from all known pages
+        for (const page of injectedPages) {
+          const batch = await execOnPage(workspace, page, generateReadRecordedJs()) as RecordedRequest[] | null;
           if (Array.isArray(batch) && batch.length > 0) {
             for (const r of batch) allRequests.push(r);
-            console.log(chalk.dim(`  [tab:${tabId}] +${batch.length} captured — total: ${allRequests.length}`));
+            console.log(chalk.dim(`  [page:${page.slice(0, 8)}] +${batch.length} captured — total: ${allRequests.length}`));
           }
         }
       } catch {
@@ -659,10 +625,10 @@ export async function recordSession(opts: RecordOptions): Promise<RecordResult> 
     cleanupEnter(); // Always clean up readline to prevent process from hanging
     clearInterval(pollInterval);
 
-    // Final drain from all known tabs
-    for (const tabId of injectedTabs) {
+    // Final drain from all known pages
+    for (const page of injectedPages) {
       try {
-        const last = await execOnTab(workspace, tabId, generateReadRecordedJs()) as RecordedRequest[] | null;
+        const last = await execOnPage(workspace, page, generateReadRecordedJs()) as RecordedRequest[] | null;
         if (Array.isArray(last) && last.length > 0) {
           for (const r of last) allRequests.push(r);
         }
@@ -680,30 +646,30 @@ export async function recordSession(opts: RecordOptions): Promise<RecordResult> 
   }
 }
 
-// ── Tab helpers ────────────────────────────────────────────────────────────
+// ── Page helpers ───────────────────────────────────────────────────────────
 
-interface TabInfo { tabId: number; url?: string }
+interface TabInfo { page?: string; url?: string }
 
 async function listTabs(workspace: string): Promise<TabInfo[]> {
   try {
     const result = await sendCommand('tabs', { op: 'list', workspace }) as TabInfo[] | null;
-    return Array.isArray(result) ? result.filter(t => t.tabId != null) : [];
+    return Array.isArray(result) ? result.filter(t => t.page != null) : [];
   } catch { return []; }
 }
 
-async function execOnTab(workspace: string, tabId: number, code: string): Promise<unknown> {
-  return sendCommand('exec', { code, workspace, tabId });
+async function execOnPage(workspace: string, page: string, code: string): Promise<unknown> {
+  return sendCommand('exec', { code, workspace, page });
 }
 
-async function injectIntoTab(workspace: string, tabId: number, injectedTabs: Set<number>): Promise<void> {
+async function injectIntoPage(workspace: string, page: string, injectedPages: Set<string>): Promise<void> {
   try {
-    await execOnTab(workspace, tabId, generateFullCaptureInterceptorJs());
-    if (!injectedTabs.has(tabId)) {
-      injectedTabs.add(tabId);
-      console.log(chalk.green(`  ✓  Interceptor injected into tab:${tabId}`));
+    await execOnPage(workspace, page, generateFullCaptureInterceptorJs());
+    if (!injectedPages.has(page)) {
+      injectedPages.add(page);
+      console.log(chalk.green(`  ✓  Interceptor injected into page:${page.slice(0, 8)}`));
     }
   } catch {
-    // Tab not debuggable (e.g. chrome:// pages) — skip silently
+    // Page not debuggable (e.g. chrome:// pages) — skip silently
   }
 }
 
@@ -756,14 +722,14 @@ function analyzeAndWrite(
   const candidates: RecordResult['candidates'] = [];
   const usedNames = new Set<string>();
 
-  console.log(chalk.bold('\n  Captured endpoints (scored):\n'));
+  console.log(chalk.bold('\n  Captured endpoints:\n'));
 
-  for (const entry of analysis.candidates.sort((a, b) => b.score - a.score).slice(0, 8)) {
+  for (const entry of analysis.candidates.sort((a, b) => (b.arrayResult?.items.length ?? 0) - (a.arrayResult?.items.length ?? 0)).slice(0, 8)) {
     const itemCount = entry.arrayResult?.items.length ?? 0;
     const strategy = entry.kind === 'write'
       ? 'cookie'
       : inferStrategy(detectAuthFromContent(entry.req.url, entry.req.responseBody));
-    const marker = entry.score >= 15 ? chalk.green('★') : entry.score >= 8 ? chalk.yellow('◆') : chalk.dim('·');
+    const marker = entry.kind === 'write' ? chalk.magenta('✎') : itemCount > 5 ? chalk.green('★') : chalk.dim('·');
     console.log(
       `  ${marker} ${chalk.white(urlToPattern(entry.req.url))}` +
       chalk.dim(` [${strategy}]`) +
@@ -783,16 +749,16 @@ function analyzeAndWrite(
     if (usedNames.has(entry.name)) continue;
     usedNames.add(entry.name);
 
-    const filePath = path.join(candidatesDir, `${entry.name}.yaml`);
-    fs.writeFileSync(filePath, yaml.dump(entry.yaml, { sortKeys: false, lineWidth: 120 }));
+    const filePath = path.join(candidatesDir, `${entry.name}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(entry.yaml, null, 2));
     candidates.push({ name: entry.name, path: filePath, strategy: entry.strategy });
 
-    console.log(chalk.green(`  ✓ Generated: ${chalk.bold(entry.name)}.yaml  [${entry.strategy}]`));
+    console.log(chalk.green(`  ✓ Generated: ${chalk.bold(entry.name)}.json  [${entry.strategy}]`));
     console.log(chalk.dim(`    → ${filePath}`));
   }
 
   if (candidates.length === 0) {
-    console.log(chalk.yellow('  No high-confidence candidates found.'));
+    console.log(chalk.yellow('  No candidates found.'));
     console.log(chalk.dim('  Tip: make sure you triggered JSON API calls (open lists, search, scroll).'));
   }
 
