@@ -45,7 +45,6 @@ OpenCLI 通过轻量 Browser Bridge 扩展和本地微型 daemon 与 Chrome/Chro
 
 ```bash
 opencli doctor
-opencli daemon status
 ```
 
 ### 4. 跑第一个命令
@@ -63,7 +62,7 @@ opencli bilibili hot --limit 5
 - `opencli list` 查看当前所有命令
 - `opencli <site> <command>` 调用内置或生成好的适配器
 - `opencli register mycli` 把本地 CLI 接入同一发现入口
-- `opencli doctor` / `opencli daemon status` 处理浏览器连通性问题
+- `opencli doctor` 处理浏览器连通性问题
 
 ## 给 AI Agent
 
@@ -129,6 +128,20 @@ OpenCLI 不只是网站 CLI，还可以：
 - 浏览器型命令需要 Chrome 或 Chromium 处于运行中，并已登录目标网站
 
 > **重要**：浏览器型命令直接复用你的 Chrome/Chromium 登录态。如果拿到空数据或出现权限类失败，先确认目标站点已经在浏览器里打开并完成登录。
+
+## 配置
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `OPENCLI_DAEMON_PORT` | `19825` | daemon-extension 通信端口 |
+| `OPENCLI_WINDOW_FOCUSED` | `false` | 设为 `1` 时 automation 窗口在前台打开（适合调试） |
+| `OPENCLI_BROWSER_CONNECT_TIMEOUT` | `30` | 浏览器连接超时（秒） |
+| `OPENCLI_BROWSER_COMMAND_TIMEOUT` | `60` | 单个浏览器命令超时（秒） |
+| `OPENCLI_BROWSER_EXPLORE_TIMEOUT` | `120` | explore/record 操作超时（秒） |
+| `OPENCLI_CDP_ENDPOINT` | — | Chrome DevTools Protocol 端点，用于远程浏览器或 Electron 应用 |
+| `OPENCLI_CDP_TARGET` | — | 按 URL 子串过滤 CDP target（如 `detail.1688.com`） |
+| `OPENCLI_VERBOSE` | `false` | 启用详细日志（`-v` 也可以） |
+| `OPENCLI_DIAGNOSTIC` | `false` | 设为 `1` 时在失败时输出结构化诊断上下文 |
 
 ## 更新
 

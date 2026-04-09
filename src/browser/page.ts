@@ -16,12 +16,7 @@ import { saveBase64ToFile } from '../utils.js';
 import { generateStealthJs } from './stealth.js';
 import { waitForDomStableJs } from './dom-helpers.js';
 import { BasePage } from './base-page.js';
-
-export function isRetryableSettleError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return message.includes('Inspected target navigated or closed')
-    || (message.includes('-32000') && message.toLowerCase().includes('target'));
-}
+import { classifyBrowserError } from './errors.js';
 
 /**
  * Page — implements IPage by talking to the daemon via HTTP.
@@ -69,15 +64,16 @@ export class Page extends BasePage {
       try {
         await sendCommand('exec', combinedOpts);
       } catch (err) {
-        if (!isRetryableSettleError(err)) throw err;
-        // SPA client-side redirects can invalidate the CDP target after
-        // chrome.tabs reports 'complete'. Wait briefly for the new document
-        // to load, then retry the settle probe once.
+        const advice = classifyBrowserError(err);
+        // Only settle-retry on target navigation (SPA client-side redirects).
+        // Extension/daemon errors are already retried by sendCommandRaw —
+        // retrying them here would silently swallow real failures.
+        if (advice.kind !== 'target-navigation') throw err;
         try {
-          await new Promise((r) => setTimeout(r, 200));
+          await new Promise((r) => setTimeout(r, advice.delayMs));
           await sendCommand('exec', combinedOpts);
         } catch (retryErr) {
-          if (!isRetryableSettleError(retryErr)) throw retryErr;
+          if (classifyBrowserError(retryErr).kind !== 'target-navigation') throw retryErr;
         }
       }
     } else {
@@ -108,8 +104,9 @@ export class Page extends BasePage {
     try {
       return await sendCommand('exec', { code, ...this._cmdOpts() });
     } catch (err) {
-      if (!isRetryableSettleError(err)) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      const advice = classifyBrowserError(err);
+      if (advice.kind !== 'target-navigation') throw err;
+      await new Promise((resolve) => setTimeout(resolve, advice.delayMs));
       return sendCommand('exec', { code, ...this._cmdOpts() });
     }
   }

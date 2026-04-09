@@ -124,6 +124,7 @@ type AutomationSession = {
 
 const automationSessions = new Map<string, AutomationSession>();
 const WINDOW_IDLE_TIMEOUT = 30000; // 30s — quick cleanup after command finishes
+let windowFocused = false; // set per-command from daemon's OPENCLI_WINDOW_FOCUSED
 
 function getWorkspaceKey(workspace?: string): string {
   return workspace?.trim() || 'default';
@@ -176,7 +177,7 @@ async function getAutomationWindow(workspace: string, initialUrl?: string): Prom
   // state value for windows.create(). The window defaults to 'normal' state anyway.
   const win = await chrome.windows.create({
     url: startUrl,
-    focused: false,
+    focused: windowFocused,
     width: 1280,
     height: 900,
     type: 'normal',
@@ -272,6 +273,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 async function handleCommand(cmd: Command): Promise<Result> {
   const workspace = getWorkspaceKey(cmd.workspace);
+  windowFocused = cmd.windowFocused === true;
   // Reset idle timer on every command (window stays alive while active)
   resetWindowIdleTimer(workspace);
   try {

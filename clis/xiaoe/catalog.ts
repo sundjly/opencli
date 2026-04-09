@@ -41,6 +41,42 @@ cli({
   clickTab('目录');
   await new Promise(function(r) { setTimeout(r, 2000); });
 
+  function getScrollTargets() {
+    return document.querySelectorAll('.scroll-view, .list-wrap, .scroller, #app');
+  }
+  function getMaxScrollHeight(scrollers) {
+    var maxHeight = document.body.scrollHeight;
+    for (var i = 0; i < scrollers.length; i++) {
+      if (scrollers[i].scrollHeight > maxHeight) maxHeight = scrollers[i].scrollHeight;
+    }
+    return maxHeight;
+  }
+
+  // 模拟滚动以实现动态加载
+  var prevMaxScrollHeight = 0;
+  for (var sc = 0; sc < 20; sc++) {
+    window.scrollTo(0, 999999);
+    var scrollers = getScrollTargets();
+    for(var si = 0; si < scrollers.length; si++) {
+      if(scrollers[si].scrollHeight > scrollers[si].clientHeight) scrollers[si].scrollTop = scrollers[si].scrollHeight;
+    }
+    await new Promise(function(r) { setTimeout(r, 800); });
+    
+    // 点击可能存在的下拉/加载更多
+    var moreTabs = document.querySelectorAll('span, div, p');
+    for (var bi = 0; bi < moreTabs.length; bi++) {
+      var t = moreTabs[bi].textContent.trim();
+      if ((t === '点击加载更多' || t === '展开更多' || t === '加载更多') && moreTabs[bi].clientHeight > 0) {
+        try { moreTabs[bi].click(); } catch(e){}
+      }
+    }
+    
+    var maxScrollHeight = getMaxScrollHeight(getScrollTargets());
+    if (sc > 3 && maxScrollHeight === prevMaxScrollHeight) break;
+    prevMaxScrollHeight = maxScrollHeight;
+  }
+  await new Promise(function(r) { setTimeout(r, 1000); });
+
   // ===== 专栏 / 大专栏 =====
   if (resourceType === 6 || resourceType === 8) {
     await new Promise(function(r) { setTimeout(r, 1000); });

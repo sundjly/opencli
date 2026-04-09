@@ -63,6 +63,8 @@ export interface Command {
   cdpMethod?: string;
   /** CDP method params for 'cdp' action */
   cdpParams?: Record<string, unknown>;
+  /** When true, automation windows are created in the foreground (focused) */
+  windowFocused?: boolean;
 }
 
 export interface Result {
