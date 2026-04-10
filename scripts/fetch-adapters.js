@@ -10,7 +10,7 @@
  * - Skips if already installed at the same version
  *
  * Only runs on global install (npm install -g) or explicit OPENCLI_FETCH=1.
- * No network calls — copies directly from dist/clis/ in the installed package.
+ * No network calls — copies directly from clis/ in the installed package.
  *
  * This is an ESM script (package.json type: module). No TypeScript, no src/ imports.
  */
@@ -23,7 +23,7 @@ const OPENCLI_DIR = join(homedir(), '.opencli');
 const USER_CLIS_DIR = join(OPENCLI_DIR, 'clis');
 const MANIFEST_PATH = join(OPENCLI_DIR, 'adapter-manifest.json');
 const PACKAGE_ROOT = resolve(import.meta.dirname, '..');
-const BUILTIN_CLIS = join(PACKAGE_ROOT, 'dist', 'clis');
+const BUILTIN_CLIS = join(PACKAGE_ROOT, 'clis');
 
 function log(msg) {
   console.log(`[opencli] ${msg}`);
@@ -95,7 +95,7 @@ export function fetchAdapters() {
   }
 
   if (!existsSync(BUILTIN_CLIS)) {
-    log('Warning: dist/clis/ not found in package — skipping adapter copy');
+    log('Warning: clis/ not found in package — skipping adapter copy');
     return;
   }
 
@@ -128,7 +128,68 @@ export function fetchAdapters() {
     }
   }
 
-  // 3. Write updated manifest
+  // 3. Clean up legacy compat shim files from ~/.opencli/
+  // These were created by an older approach that placed re-export shims directly
+  // in ~/.opencli/ (e.g., registry.js, errors.js, browser/). The current approach
+  // uses a node_modules/@jackwener/opencli symlink instead.
+  const LEGACY_SHIM_FILES = [
+    'registry.js', 'errors.js', 'utils.js', 'launcher.js', 'logger.js', 'types.js',
+  ];
+  const LEGACY_SHIM_DIRS = [
+    'browser', 'download', 'errors', 'launcher', 'logger', 'pipeline', 'registry', 'types', 'utils',
+  ];
+  let legacyCleaned = 0;
+  for (const file of LEGACY_SHIM_FILES) {
+    const p = join(OPENCLI_DIR, file);
+    try {
+      const content = readFileSync(p, 'utf-8');
+      // Only delete if it's a re-export shim, not a user-created file
+      if (content.includes("export * from 'file://")) {
+        unlinkSync(p);
+        legacyCleaned++;
+      }
+    } catch { /* doesn't exist */ }
+  }
+  for (const dir of LEGACY_SHIM_DIRS) {
+    const p = join(OPENCLI_DIR, dir);
+    try {
+      // Delete individual shim files, then prune empty directory
+      for (const entry of readdirSync(p)) {
+        const fp = join(p, entry);
+        try {
+          if (!statSync(fp).isFile()) continue;
+          const content = readFileSync(fp, 'utf-8');
+          if (content.includes("export * from 'file://")) {
+            unlinkSync(fp);
+            legacyCleaned++;
+          }
+        } catch { /* skip unreadable entries */ }
+      }
+      // Remove directory only if now empty
+      try {
+        if (readdirSync(p).length === 0) rmSync(p);
+      } catch { /* ignore */ }
+    } catch { /* doesn't exist or not a directory */ }
+  }
+
+  // 4. Clean up stale .plugins.lock.json.tmp-* files
+  let tmpCleaned = 0;
+  try {
+    for (const entry of readdirSync(OPENCLI_DIR)) {
+      if (entry.startsWith('.plugins.lock.json.tmp-')) {
+        try {
+          unlinkSync(join(OPENCLI_DIR, entry));
+          tmpCleaned++;
+        } catch { /* ignore */ }
+      }
+    }
+  } catch { /* ignore */ }
+
+  if (legacyCleaned > 0 || tmpCleaned > 0) {
+    log(`Cleaned up${legacyCleaned > 0 ? ` ${legacyCleaned} legacy shim files` : ''}${tmpCleaned > 0 ? `${legacyCleaned > 0 ? ',' : ''} ${tmpCleaned} stale tmp files` : ''}`);
+  }
+
+  // 5. Write updated manifest
   writeFileSync(MANIFEST_PATH, JSON.stringify({
     version: currentVersion,
     files: [...newOfficialFiles].sort(),
