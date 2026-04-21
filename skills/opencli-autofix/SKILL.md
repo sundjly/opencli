@@ -130,8 +130,11 @@ opencli browser open https://example.com/target-page && opencli browser state
 # Interact to trigger API calls
 opencli browser click <N> && opencli browser network
 
-# Inspect specific API response
-opencli browser network --detail <index>
+# Narrow to the request you care about by the fields its body should have
+opencli browser network --filter author,text,likes
+
+# Inspect specific API response (key is the `key` field from the default JSON output)
+opencli browser network --detail <key>
 ```
 
 ## Step 4: Patch the Adapter
@@ -250,7 +253,7 @@ If `gh` is not installed or not authenticated, tell the user and skip — do not
 **Soft stops (report after attempting):**
 - **3 repair rounds exhausted** — stop, report what was tried and what failed
 - **Feature completely removed** — the data no longer exists
-- **Major redesign** — needs full adapter rewrite via `opencli-explorer` skill
+- **Major redesign** — needs full adapter rewrite via `opencli-adapter-author` skill
 
 In all stop cases, clearly communicate the situation to the user rather than making futile patches.
 
