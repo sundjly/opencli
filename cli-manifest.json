@@ -17343,6 +17343,56 @@
   },
   {
     "site": "weixin",
+    "name": "create-draft",
+    "description": "创建微信公众号图文草稿",
+    "domain": "mp.weixin.qq.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "title",
+        "type": "str",
+        "required": true,
+        "help": "文章标题 (最长64字)"
+      },
+      {
+        "name": "content",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "文章正文"
+      },
+      {
+        "name": "author",
+        "type": "str",
+        "required": false,
+        "help": "作者名 (最长8字)"
+      },
+      {
+        "name": "cover-image",
+        "type": "str",
+        "required": false,
+        "help": "封面图片路径 (会先上传到正文再设为封面)"
+      },
+      {
+        "name": "summary",
+        "type": "str",
+        "required": false,
+        "help": "文章摘要"
+      }
+    ],
+    "columns": [
+      "status",
+      "detail"
+    ],
+    "timeout": 180,
+    "type": "js",
+    "modulePath": "weixin/create-draft.js",
+    "sourceFile": "weixin/create-draft.js",
+    "navigateBefore": false
+  },
+  {
+    "site": "weixin",
     "name": "download",
     "description": "下载微信公众号文章为 Markdown 格式",
     "domain": "mp.weixin.qq.com",
@@ -17382,6 +17432,33 @@
     "modulePath": "weixin/download.js",
     "sourceFile": "weixin/download.js",
     "navigateBefore": "https://mp.weixin.qq.com"
+  },
+  {
+    "site": "weixin",
+    "name": "drafts",
+    "description": "列出微信公众号草稿箱",
+    "domain": "mp.weixin.qq.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 10,
+        "required": false,
+        "help": "最多显示条数"
+      }
+    ],
+    "columns": [
+      "Index",
+      "Title",
+      "Time"
+    ],
+    "timeout": 60,
+    "type": "js",
+    "modulePath": "weixin/drafts.js",
+    "sourceFile": "weixin/drafts.js",
+    "navigateBefore": false
   },
   {
     "site": "weread",
