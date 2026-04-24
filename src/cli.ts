@@ -29,6 +29,7 @@ import { DEFAULT_TTL_MS, findEntry, loadNetworkCache, saveNetworkCache, type Cac
 import { parseFilter, shapeMatchesFilter } from './browser/shape-filter.js';
 import { buildHtmlTreeJs, type HtmlTreeResult } from './browser/html-tree.js';
 import { buildExtractHtmlJs, runExtractFromHtml } from './browser/extract.js';
+import { analyzeSite, type PageSignals } from './browser/analyze.js';
 import { daemonStatus, daemonStop } from './commands/daemon.js';
 import { log } from './logger.js';
 
@@ -59,30 +60,37 @@ type BrowserNetworkItem = {
 async function captureNetworkItems(page: import('./types.js').IPage): Promise<BrowserNetworkItem[]> {
   if (page.readNetworkCapture) {
     const raw = await page.readNetworkCapture();
-    return (raw as Array<Record<string, unknown>>).map((e) => {
-      const preview = (e.responsePreview as string) ?? null;
-      let body: unknown = null;
-      if (preview) {
-        try { body = JSON.parse(preview); } catch { body = preview; }
-      }
-      const fullSize = typeof e.responseBodyFullSize === 'number'
-        ? (e.responseBodyFullSize as number)
-        : (preview ? preview.length : 0);
-      const truncated = e.responseBodyTruncated === true;
-      return {
-        url: (e.url as string) || '',
-        method: (e.method as string) || 'GET',
-        status: (e.responseStatus as number) || 0,
-        size: fullSize,
-        ct: (e.responseContentType as string) || '',
-        body,
-        bodyFullSize: fullSize,
-        bodyTruncated: truncated,
-      };
-    });
+    if (Array.isArray(raw) && raw.length > 0) {
+      return (raw as Array<Record<string, unknown>>).map((e) => {
+        const preview = (e.responsePreview as string) ?? null;
+        let body: unknown = null;
+        if (preview) {
+          try { body = JSON.parse(preview); } catch { body = preview; }
+        }
+        const fullSize = typeof e.responseBodyFullSize === 'number'
+          ? (e.responseBodyFullSize as number)
+          : (preview ? preview.length : 0);
+        const truncated = e.responseBodyTruncated === true;
+        return {
+          url: (e.url as string) || '',
+          method: (e.method as string) || 'GET',
+          status: (e.responseStatus as number) || 0,
+          size: fullSize,
+          ct: (e.responseContentType as string) || '',
+          body,
+          bodyFullSize: fullSize,
+          bodyTruncated: truncated,
+        };
+      });
+    }
   }
-  const raw = await page.evaluate(`(function(){ return JSON.stringify(window.__opencli_net || []); })()`) as string;
-  try { return JSON.parse(raw) as BrowserNetworkItem[]; } catch { return []; }
+  const raw = await page.evaluate(`(function(){ var out = window.__opencli_net || []; window.__opencli_net = []; return JSON.stringify(out); })()`) as string;
+  try {
+    return JSON.parse(raw) as BrowserNetworkItem[];
+  } catch {
+    if (process.env.OPENCLI_VERBOSE) log.warn(`[network] Failed to parse interceptor buffer: ${typeof raw === 'string' ? raw.slice(0, 200) : String(raw)}`);
+    return [];
+  }
 }
 
 /** Drop static-resource / telemetry noise so agents see only API-shaped traffic. */
@@ -94,10 +102,124 @@ function filterNetworkItems(items: BrowserNetworkItem[]): BrowserNetworkItem[] {
   );
 }
 
+/** Exit codes by network error code — usage errors vs runtime failures. */
+const NETWORK_ERROR_EXIT: Record<string, number> = {
+  invalid_args: EXIT_CODES.USAGE_ERROR,
+  invalid_filter: EXIT_CODES.USAGE_ERROR,
+  invalid_max_body: EXIT_CODES.USAGE_ERROR,
+};
+
 /** Emit a structured error JSON so agents can branch on `error.code` without regex. */
 function emitNetworkError(code: string, message: string, extra: Record<string, unknown> = {}): void {
   console.log(JSON.stringify({ error: { code, message, ...extra } }, null, 2));
-  process.exitCode = EXIT_CODES.USAGE_ERROR;
+  process.exitCode = NETWORK_ERROR_EXIT[code] ?? EXIT_CODES.GENERIC_ERROR;
+}
+
+/**
+ * Check whether the site-memory scaffolding exists under
+ * ~/.opencli/sites/<site>/. Agents have a strong tendency to forget to write
+ * endpoints.json / notes.md after a successful verify, which dooms the next
+ * agent to redo recon from scratch. Surfacing the current state as part of
+ * verify's final report converts that "silent skip" into a visible nudge;
+ * `--strict-memory` escalates it to a failure so agents driving a hardened
+ * workflow can't forget.
+ */
+export type SiteMemoryReport = {
+  ok: boolean;
+  siteDir: string;
+  endpoints: { present: boolean; count: number; path: string };
+  notes: { present: boolean; path: string };
+};
+
+export function checkSiteMemory(site: string): SiteMemoryReport {
+  const siteDir = path.join(os.homedir(), '.opencli', 'sites', site);
+  const endpointsPath = path.join(siteDir, 'endpoints.json');
+  const notesPath = path.join(siteDir, 'notes.md');
+  let endpointsCount = 0;
+  let endpointsPresent = fs.existsSync(endpointsPath);
+  if (endpointsPresent) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(endpointsPath, 'utf-8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        endpointsCount = Object.keys(parsed).length;
+      } else if (Array.isArray(parsed)) {
+        endpointsCount = parsed.length;
+      }
+    } catch {
+      endpointsPresent = false;
+    }
+  }
+  const notesPresent = fs.existsSync(notesPath);
+  return {
+    ok: endpointsPresent && endpointsCount > 0 && notesPresent,
+    siteDir,
+    endpoints: { present: endpointsPresent, count: endpointsCount, path: endpointsPath },
+    notes: { present: notesPresent, path: notesPath },
+  };
+}
+
+export function printSiteMemoryReport(report: SiteMemoryReport, strict: boolean | undefined): void {
+  if (report.ok) {
+    console.log(`  ✓ Memory: endpoints.json (${report.endpoints.count}), notes.md present at ${report.siteDir}`);
+    return;
+  }
+  const marker = strict ? '✗' : '⚠';
+  const missing: string[] = [];
+  if (!report.endpoints.present) missing.push('endpoints.json');
+  else if (report.endpoints.count === 0) missing.push('endpoints.json (empty)');
+  if (!report.notes.present) missing.push('notes.md');
+  console.log(`  ${marker} Memory: missing ${missing.join(', ')} under ${report.siteDir}`);
+  console.log(`    Write the endpoint you just verified + a 1-line session note so the next agent starts from minute 0, not minute 95.`);
+  if (!strict) {
+    console.log(`    (Re-run with --strict-memory to fail instead of warn.)`);
+  }
+}
+
+/** Coerce adapter JSON output into a row array. Accepts `[{...}]`, single `{}`, or `{items:[...]}`-style envelopes. */
+export function normalizeVerifyRows(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) {
+    return data.map((r) => (r && typeof r === 'object' ? r as Record<string, unknown> : { value: r }));
+  }
+  if (data && typeof data === 'object') {
+    const obj = data as Record<string, unknown>;
+    for (const k of ['rows', 'items', 'data', 'results']) {
+      if (Array.isArray(obj[k])) {
+        return (obj[k] as unknown[]).map((r) => (r && typeof r === 'object' ? r as Record<string, unknown> : { value: r }));
+      }
+    }
+    return [obj];
+  }
+  return [];
+}
+
+/** Render up to 10 rows as a compact padded table for eyeball inspection during verify. */
+export function renderVerifyPreview(
+  rows: Record<string, unknown>[],
+  opts: { maxRows?: number; maxCols?: number; cellMax?: number } = {},
+): string {
+  const maxRows = opts.maxRows ?? 10;
+  const maxCols = opts.maxCols ?? 6;
+  const cellMax = opts.cellMax ?? 40;
+  if (rows.length === 0) return '  (no rows)';
+
+  const allCols = Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
+  const cols = allCols.slice(0, maxCols);
+  const shown = rows.slice(0, maxRows);
+  const cellOf = (v: unknown): string => {
+    if (v === null || v === undefined) return '';
+    const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return s.replace(/\s+/g, ' ').slice(0, cellMax);
+  };
+  const widths = cols.map((c) => Math.max(c.length, ...shown.map((r) => cellOf(r[c]).length)));
+  const fmtRow = (vals: string[]): string => vals.map((v, i) => v.padEnd(widths[i])).join('  ');
+
+  const out: string[] = [];
+  out.push(`  ${fmtRow(cols)}`);
+  out.push(`  ${widths.map((w) => '-'.repeat(w)).join('  ')}`);
+  for (const r of shown) out.push(`  ${fmtRow(cols.map((c) => cellOf(r[c])))}`);
+  if (rows.length > maxRows) out.push(`  ... and ${rows.length - maxRows} more row(s)`);
+  if (allCols.length > maxCols) out.push(`  (${allCols.length - maxCols} more column(s) hidden)`);
+  return out.join('\n');
 }
 
 type BrowserTargetState = {
@@ -584,6 +706,79 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
       }
     }));
 
+  // ── Analyze (site recon, agent-native) ──
+  //
+  // Mechanizes the `site-recon.md` decision tree into one CLI call. The agent
+  // calls `browser analyze <url>` and gets back:
+  //
+  //   - pattern: A/B/C/D (mapped from network + SSR-globals signals)
+  //   - anti_bot: vendor + evidence + the one-liner for "what to do next"
+  //   - initial_state: which window globals are populated
+  //   - nearest_adapter: existing commands for the same site, if any
+  //   - recommended_next_step: a single imperative sentence
+  //
+  // Intent: replace the "open → eyeball network → curl → WAF → try again"
+  // feedback loop with a single deterministic verdict. Without this, agents
+  // burn ~20min per WAF-protected site re-discovering anti-bot posture.
+  addBrowserTabOption(browser.command('analyze').argument('<url>'))
+    .description('Classify site: anti-bot vendor, pattern (A/B/C/D), nearest adapter, recommended next step')
+    .action(browserAction(async (page, url) => {
+      const hasSessionCapture = await page.startNetworkCapture?.() ?? false;
+      await page.goto(url);
+      await page.wait(2);
+      if (!hasSessionCapture) {
+        try { await page.evaluate(NETWORK_INTERCEPTOR_JS); } catch { /* non-fatal */ }
+      }
+      await captureNetworkItems(page);
+      // Best-effort: give the page another beat so XHR after DOMContentLoaded lands.
+      await page.wait(1);
+
+      const rawItems = await captureNetworkItems(page);
+      const networkEntries = rawItems.map((e) => ({
+        url: e.url,
+        status: e.status,
+        contentType: e.ct,
+        bodyPreview: typeof e.body === 'string'
+          ? e.body.slice(0, 2000)
+          : (e.body ? JSON.stringify(e.body).slice(0, 2000) : null),
+      }));
+
+      const probeJs = `(function(){
+        return {
+          cookieNames: (document.cookie || '').split(';').map(function(c){ return c.trim().split('=')[0]; }).filter(Boolean),
+          initialState: {
+            __INITIAL_STATE__: typeof window.__INITIAL_STATE__ !== 'undefined',
+            __NUXT__: typeof window.__NUXT__ !== 'undefined',
+            __NEXT_DATA__: typeof window.__NEXT_DATA__ !== 'undefined',
+            __APOLLO_STATE__: typeof window.__APOLLO_STATE__ !== 'undefined',
+          },
+          title: document.title || '',
+          finalUrl: location.href,
+        };
+      })()`;
+      const probe = await page.evaluate(probeJs) as {
+        cookieNames: string[];
+        initialState: PageSignals['initialState'];
+        title: string;
+        finalUrl: string;
+      };
+      const browserCookieNames = (await page.getCookies({ url: probe.finalUrl || url }).catch(() => []))
+        .map((c) => c.name)
+        .filter(Boolean);
+      const cookieNames = [...new Set([...probe.cookieNames, ...browserCookieNames])];
+
+      const signals: PageSignals = {
+        requestedUrl: url,
+        finalUrl: probe.finalUrl,
+        cookieNames,
+        networkEntries,
+        initialState: probe.initialState,
+        title: probe.title,
+      };
+      const report = analyzeSite(signals, getRegistry());
+      console.log(JSON.stringify(report, null, 2));
+    }));
+
   // ── Find (structured CSS query, agent-native) ──
   //
   // `browser find --css <sel>` lets agents jump straight from a semantic
@@ -954,10 +1149,10 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
   // ── Wait commands ──
 
   addBrowserTabOption(browser.command('wait'))
-    .argument('<type>', 'selector, text, or time')
-    .argument('[value]', 'CSS selector, text string, or seconds')
+    .argument('<type>', 'selector, text, time, or xhr')
+    .argument('[value]', 'CSS selector, text string, seconds, or XHR URL regex')
     .option('--timeout <ms>', 'Timeout in milliseconds', '10000')
-    .description('Wait for selector, text, or time (e.g. wait selector ".loaded", wait text "Success", wait time 3)')
+    .description('Wait for selector, text, time, or matching XHR (e.g. wait selector ".loaded", wait text "Success", wait time 3, wait xhr "/api/search")')
     .action(browserAction(async (page, type, value, opts) => {
       const timeout = parseInt(opts.timeout, 10);
       if (type === 'time') {
@@ -972,8 +1167,47 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
         if (!value) { console.error('Missing text'); process.exitCode = EXIT_CODES.USAGE_ERROR; return; }
         await page.wait({ text: value, timeout: timeout / 1000 });
         console.log(`Text "${value}" appeared`);
+      } else if (type === 'xhr') {
+        // Poll the capture ring until an entry matches the URL regex — turns
+        // the common "open page, wait N seconds, hope the data landed" idiom
+        // into a deterministic barrier keyed on the API the agent actually
+        // cares about. Prevents silent "empty DOM" failures on slow SPAs.
+        if (!value) { console.error('Missing XHR URL regex'); process.exitCode = EXIT_CODES.USAGE_ERROR; return; }
+        let re: RegExp;
+        try { re = new RegExp(value); } catch (err) {
+          console.error(`Invalid regex "${value}": ${err instanceof Error ? err.message : String(err)}`);
+          process.exitCode = EXIT_CODES.USAGE_ERROR;
+          return;
+        }
+        const hasSessionCapture = await page.startNetworkCapture?.() ?? false;
+        if (!hasSessionCapture) {
+          try { await page.evaluate(NETWORK_INTERCEPTOR_JS); } catch { /* non-fatal */ }
+        }
+        await captureNetworkItems(page);
+        const deadline = Date.now() + timeout;
+        const pollMs = 400;
+        let matched: BrowserNetworkItem | null = null;
+        while (Date.now() < deadline && !matched) {
+          const items = await captureNetworkItems(page);
+          matched = items.find((e) => re.test(e.url)) ?? null;
+          if (!matched) await new Promise((r) => setTimeout(r, pollMs));
+        }
+        if (!matched) {
+          console.log(JSON.stringify({
+            error: {
+              code: 'xhr_not_seen',
+              message: `No captured XHR matched /${value}/ within ${timeout}ms`,
+              hint: 'Check the pattern against `browser network` output; the endpoint may not have fired yet, or capture is disabled.',
+            },
+          }, null, 2));
+          process.exitCode = EXIT_CODES.GENERIC_ERROR;
+          return;
+        }
+        console.log(JSON.stringify({
+          matched: { url: matched.url, status: matched.status, contentType: matched.ct },
+        }, null, 2));
       } else {
-        console.error(`Unknown wait type "${type}". Use: selector, text, or time`);
+        console.error(`Unknown wait type "${type}". Use: selector, text, time, or xhr`);
         process.exitCode = EXIT_CODES.USAGE_ERROR;
       }
     }));
@@ -1328,8 +1562,12 @@ cli({
 
   browser.command('verify')
     .argument('<name>', 'Adapter name in site/command format (e.g. hn/top)')
-    .description('Execute an adapter and show results')
-    .action(async (name: string) => {
+    .option('--write-fixture', 'Write a starter fixture to ~/.opencli/sites/<site>/verify/<command>.json if none exists')
+    .option('--update-fixture', 'Overwrite an existing fixture with one derived from current output')
+    .option('--no-fixture', 'Ignore any fixture file for this run (no value-level validation)')
+    .option('--strict-memory', 'Fail (not just warn) when ~/.opencli/sites/<site>/endpoints.json or notes.md is missing')
+    .description('Execute an adapter and validate output; uses fixture at ~/.opencli/sites/<site>/verify/<cmd>.json when present')
+    .action(async (name: string, opts: { fixture?: boolean; writeFixture?: boolean; updateFixture?: boolean; strictMemory?: boolean } = {}) => {
       try {
         const parts = name.split('/');
         if (parts.length !== 2) { console.error('Name must be site/command format'); process.exitCode = EXIT_CODES.USAGE_ERROR; return; }
@@ -1341,7 +1579,7 @@ cli({
         }
 
         const { execFileSync } = await import('node:child_process');
-        const os = await import('node:os');
+        const { loadFixture, writeFixture, deriveFixture, validateRows, fixturePath, expandFixtureArgs } = await import('./browser/verify-fixture.js');
         const filePath = path.join(os.homedir(), '.opencli', 'clis', site, `${command}.js`);
         if (!fs.existsSync(filePath)) {
           console.error(`Adapter not found: ${filePath}`);
@@ -1353,15 +1591,27 @@ cli({
         console.log(`🔍 Verifying ${name}...\n`);
         console.log(`  Loading: ${filePath}`);
 
-        // Read adapter to check if it defines a 'limit' arg
+        const useFixture = opts.fixture !== false;
+        let fixture = useFixture ? loadFixture(site, command) : null;
+
+        // Build adapter args: fixture.args override the legacy --limit 3 heuristic.
+        //   - object form   { "limit": 3 }            → `--limit 3`
+        //   - array form    ["123", "--limit", "3"]   → verbatim (for positional subjects)
         const adapterSrc = fs.readFileSync(filePath, 'utf-8');
         const hasLimitArg = /['"]limit['"]/.test(adapterSrc);
-        const limitFlag = hasLimitArg ? ' --limit 3' : '';
-        const limitArgs = hasLimitArg ? ['--limit', '3'] : [];
+        const fixtureArgs = fixture?.args;
+        const cliArgs: string[] = expandFixtureArgs(fixtureArgs);
+        if (cliArgs.length === 0 && hasLimitArg) cliArgs.push('--limit', '3');
+
+        const argDisplay = cliArgs.join(' ');
         const invocation = resolveBrowserVerifyInvocation();
 
+        // Always request JSON so we can validate structurally.
+        const execArgs = [...invocation.args, site, command, ...cliArgs, '--format', 'json'];
+
+        let rawJson: string;
         try {
-          const output = execFileSync(invocation.binary, [...invocation.args, site, command, ...limitArgs], {
+          rawJson = execFileSync(invocation.binary, execArgs, {
             cwd: invocation.cwd,
             timeout: 30000,
             encoding: 'utf-8',
@@ -1369,18 +1619,78 @@ cli({
             stdio: ['pipe', 'pipe', 'pipe'],
             ...(invocation.shell ? { shell: true } : {}),
           });
-          console.log(`  Executing: opencli ${site} ${command}${limitFlag}\n`);
-          console.log(output);
-          console.log(`\n  ✓ Adapter works!`);
         } catch (err) {
-          console.log(`  Executing: opencli ${site} ${command}${limitFlag}\n`);
-          // execFileSync attaches captured stdout/stderr on its thrown Error.
+          console.log(`  Executing: opencli ${site} ${command} ${argDisplay}\n`);
           const execErr = err as { stdout?: string | Buffer; stderr?: string | Buffer };
           if (execErr.stdout) console.log(String(execErr.stdout));
           if (execErr.stderr) console.error(String(execErr.stderr).slice(0, 500));
           console.log(`\n  ✗ Adapter failed. Fix the code and try again.`);
           process.exitCode = EXIT_CODES.GENERIC_ERROR;
+          return;
         }
+
+        console.log(`  Executing: opencli ${site} ${command} ${argDisplay}\n`);
+
+        let rows: Record<string, unknown>[];
+        try {
+          rows = normalizeVerifyRows(JSON.parse(rawJson));
+        } catch {
+          console.log(rawJson);
+          console.log('\n  ✗ Could not parse adapter output as JSON. Is `--format json` broken?');
+          process.exitCode = EXIT_CODES.GENERIC_ERROR;
+          return;
+        }
+
+        console.log(renderVerifyPreview(rows));
+        console.log(`\n  → ${rows.length} row${rows.length === 1 ? '' : 's'}`);
+
+        // ── Fixture handling ───────────────────────────────────────────
+        if (opts.writeFixture || opts.updateFixture) {
+          if (fixture && !opts.updateFixture) {
+            console.log(`\n  Fixture already exists at ${fixturePath(site, command)}.`);
+            console.log(`  Use --update-fixture to overwrite.`);
+          } else {
+            const seedArgs = fixtureArgs !== undefined
+              ? fixtureArgs
+              : (hasLimitArg ? { limit: 3 } : undefined);
+            const derived = deriveFixture(rows, seedArgs);
+            const p = writeFixture(site, command, derived);
+            console.log(`\n  ${fixture ? '↻ Updated' : '✎ Wrote'} fixture: ${p}`);
+            console.log(`  Review and hand-tune the derived expectations (add patterns / notEmpty, tighten rowCount).`);
+            fixture = derived;
+          }
+        }
+
+        if (!fixture) {
+          console.log(`\n  ✓ Adapter runs. (No fixture at ${fixturePath(site, command)} — consider --write-fixture to seed one.)`);
+          const memoryReport = checkSiteMemory(site);
+          printSiteMemoryReport(memoryReport, opts.strictMemory);
+          if (!memoryReport.ok && opts.strictMemory) {
+            process.exitCode = EXIT_CODES.GENERIC_ERROR;
+          }
+          return;
+        }
+
+        const failures = validateRows(rows, fixture);
+        if (failures.length === 0) {
+          console.log(`\n  ✓ Adapter matches fixture (${fixturePath(site, command)}).`);
+          const memoryReport = checkSiteMemory(site);
+          printSiteMemoryReport(memoryReport, opts.strictMemory);
+          if (!memoryReport.ok && opts.strictMemory) {
+            process.exitCode = EXIT_CODES.GENERIC_ERROR;
+          }
+          return;
+        }
+
+        console.log(`\n  ✗ Adapter output does not match fixture:`);
+        for (const f of failures.slice(0, 20)) {
+          const where = f.rowIndex !== undefined ? `row[${f.rowIndex}] ` : '';
+          console.log(`    - [${f.rule}] ${where}${f.detail}`);
+        }
+        if (failures.length > 20) {
+          console.log(`    ... and ${failures.length - 20} more failure(s)`);
+        }
+        process.exitCode = EXIT_CODES.GENERIC_ERROR;
       } catch (err) {
         console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
         process.exitCode = EXIT_CODES.GENERIC_ERROR;
@@ -1891,4 +2201,3 @@ export function resolveBrowserVerifyInvocation(opts: {
     ...(platform === 'win32' ? { shell: true } : {}),
   };
 }
-

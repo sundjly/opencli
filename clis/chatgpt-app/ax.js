@@ -60,6 +60,125 @@ for list in lists {
 let data = try! JSONSerialization.data(withJSONObject: best, options: [])
 print(String(data: data, encoding: .utf8)!)
 `;
+const AX_SEND_SCRIPT = `
+import Cocoa
+import ApplicationServices
+
+func attr(_ el: AXUIElement, _ name: String) -> AnyObject? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(el, name as CFString, &value) == .success else { return nil }
+    return value as AnyObject?
+}
+
+func s(_ el: AXUIElement, _ name: String) -> String? {
+    if let v = attr(el, name) as? String { return v }
+    return nil
+}
+
+func isEnabled(_ el: AXUIElement) -> Bool {
+    (attr(el, kAXEnabledAttribute as String) as? Bool) ?? true
+}
+
+func children(_ el: AXUIElement) -> [AXUIElement] {
+    (attr(el, kAXChildrenAttribute as String) as? [AnyObject] ?? []).map { $0 as! AXUIElement }
+}
+
+func collectEditableInputs(_ el: AXUIElement, into out: inout [AXUIElement], depth: Int = 0) {
+    guard depth < 25 else { return }
+    let role = s(el, kAXRoleAttribute as String) ?? ""
+    if (role == kAXTextAreaRole as String || role == kAXTextFieldRole as String) && isEnabled(el) {
+        out.append(el)
+    }
+    for c in children(el) { collectEditableInputs(c, into: &out, depth: depth + 1) }
+}
+
+func isInput(_ el: AXUIElement) -> Bool {
+    let role = s(el, kAXRoleAttribute as String) ?? ""
+    return role == kAXTextAreaRole as String || role == kAXTextFieldRole as String
+}
+
+func focusedInput(_ axApp: AXUIElement) -> AXUIElement? {
+    guard let focused = attr(axApp, kAXFocusedUIElementAttribute as String) as! AXUIElement? else {
+        return nil
+    }
+    return isInput(focused) && isEnabled(focused) ? focused : nil
+}
+
+func findByDescriptions(_ el: AXUIElement, _ targets: [String], depth: Int = 0) -> AXUIElement? {
+    guard depth < 25 else { return nil }
+    let role = s(el, kAXRoleAttribute as String) ?? ""
+    let desc = s(el, kAXDescriptionAttribute as String) ?? ""
+    if role == "AXButton" && targets.contains(desc) && isEnabled(el) { return el }
+    for c in children(el) {
+        if let found = findByDescriptions(c, targets, depth: depth + 1) { return found }
+    }
+    return nil
+}
+
+func press(_ el: AXUIElement) {
+    AXUIElementPerformAction(el, kAXPressAction as CFString)
+}
+
+let args = CommandLine.arguments
+guard args.count > 1 else {
+    fputs("Missing prompt text\\n", stderr)
+    exit(1)
+}
+let text = args[1]
+
+guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.chat").first else {
+    fputs("ChatGPT not running\\n", stderr)
+    exit(1)
+}
+
+let axApp = AXUIElementCreateApplication(app.processIdentifier)
+guard let win = attr(axApp, kAXFocusedWindowAttribute as String) as! AXUIElement? else {
+    fputs("No focused ChatGPT window\\n", stderr)
+    exit(1)
+}
+
+var inputs: [AXUIElement] = []
+collectEditableInputs(win, into: &inputs)
+guard let input = focusedInput(axApp) ?? inputs.last else {
+    fputs("Could not find editable input area\\n", stderr)
+    exit(1)
+}
+
+guard AXUIElementSetAttributeValue(input, kAXValueAttribute as CFString, text as CFTypeRef) == .success else {
+    fputs("Failed to set input value\\n", stderr)
+    exit(1)
+}
+
+Thread.sleep(forTimeInterval: 0.2)
+
+guard s(input, kAXValueAttribute as String) == text else {
+    fputs("Failed to verify input value after AX set\\n", stderr)
+    exit(1)
+}
+
+guard let sendButton = findByDescriptions(win, ["发送", "Send"]) else {
+    fputs("Could not find send button\\n", stderr)
+    exit(1)
+}
+
+press(sendButton)
+
+var submitted = false
+for _ in 0..<15 {
+    Thread.sleep(forTimeInterval: 0.1)
+    if s(input, kAXValueAttribute as String) != text {
+        submitted = true
+        break
+    }
+}
+
+guard submitted else {
+    fputs("Prompt did not leave input after pressing send\\n", stderr)
+    exit(1)
+}
+
+print("Sent")
+`;
 const AX_MODEL_SCRIPT = `
 import Cocoa
 import ApplicationServices
@@ -192,7 +311,8 @@ let axApp = AXUIElementCreateApplication(app.processIdentifier)
 guard let win = attr(axApp, kAXFocusedWindowAttribute as String) as! AXUIElement? else {
     print("false"); exit(0)
 }
-print(hasButton(win, desc: "Stop generating") ? "true" : "false")
+let targets = ["Stop generating", "停止生成"]
+print(targets.contains(where: { hasButton(win, desc: $0) }) ? "true" : "false")
 `;
 const MODEL_MAP = {
     'auto': { desc: 'Auto' },
@@ -220,6 +340,13 @@ export function selectModel(model) {
         maxBuffer: 10 * 1024 * 1024,
     }).trim();
     return output;
+}
+export function sendPrompt(text) {
+    return execFileSync('swift', ['-', text], {
+        input: AX_SEND_SCRIPT,
+        encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
+    }).trim();
 }
 export function isGenerating() {
     try {
@@ -250,3 +377,7 @@ export function getVisibleChatMessages() {
         .map((item) => item.replace(/[\uFFFC\u200B-\u200D\uFEFF]/g, '').trim())
         .filter((item) => item.length > 0);
 }
+export const __test__ = {
+    AX_SEND_SCRIPT,
+    AX_GENERATING_SCRIPT,
+};

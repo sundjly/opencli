@@ -6,6 +6,44 @@
 
 ---
 
+## §0 进入 §1 之前：先看两条红线
+
+这两条不看清楚，后面的 endpoint 验证会一直在错的前提下兜圈子。
+
+### 0.1 反爬厂商 → 决定 fetch 能不能从 Node 走
+
+`opencli browser analyze <url>` 的 `anti_bot` 字段给答案；手查看 cookies 也行：
+
+| cookie / body 信号 | 厂商 | 裸 Node fetch / curl 结果 | 策略 |
+|------------------|------|-----|-----|
+| `acw_sc__v2` / `acw_tc` / `ssxmod_itna`；body 含 `arg1 = '32-HEX'` 或 `/ntc_captcha/` | **Aliyun WAF** | 返回 slider HTML，不是真数据 | 先在浏览器上下文里验证 endpoint；HTML 型 COOKIE adapter 最终仍走 Node-side fetch + `page.getCookies()` |
+| `__cf_bm` / `cf_clearance` / `__cfduid`；body 含 `Cloudflare Ray ID` / `Checking your browser` | **Cloudflare** | TLS 指纹被标记，失败 | 同上：先 browser-context probe，最终 adapter 仍按模板选 fetch 路线 |
+| `_abck` / `bm_sz` / `bm_sv` | **Akamai** | 即使带 cookie 也常被挡 | 同上 |
+| body 含 `geetest` / `gt_captcha` | **Geetest** | 滑块/拼图，程序无解 | 超出 skill 范围，放弃或 UI 策略 |
+
+**规则**：看到上面四种任一个，先不要拿**裸** Node fetch 做 endpoint 验证。先用 browser-context probe 或目标 origin 页面确认接口能通；最终 adapter 的 fetch 路线仍按 `adapter-template.md` 选，HTML 型 COOKIE adapter 继续走 Node-side fetch + `page.getCookies()`。
+
+### 0.2 跨 subdomain = CORS 默认关
+
+`jobs.51job.com` 页面 fetch `cupid.51job.com` 的 API，默认会被浏览器 CORS 预检挡住——除非目标接口回了 `Access-Control-Allow-Origin`。
+
+判断：
+
+```bash
+opencli browser eval "fetch('https://<target-subdomain>/api/...', {credentials:'include'}).then(r=>r.status).catch(e=>'cors:'+e.message)"
+```
+
+- 返回 status 数字 → CORS 通，继续
+- 返回 `cors:...` 或 `TypeError: Failed to fetch` → 挡住了
+
+**挡住时**：不要把 `credentials:'include'` 当万能药——这只解决"带 cookie"，不解决"跨 origin"。降级路径：
+
+1. 换同 origin 的 endpoint（同一个 subdomain 下的 API 往往更宽松）
+2. 用 `opencli browser open https://<target-subdomain>/`，让页面在目标 subdomain 本身打开，再 fetch 相对路径
+3. 真跨域且无替代 → 走 `§5 intercept`，从页面自身发的请求里抓响应
+
+---
+
 ## §1 network 精读（首选，Pattern A / D 命中率最高）
 
 ### 拿候选
@@ -171,6 +209,10 @@ opencli browser eval "document.cookie.split('; ').reduce((o,x)=>{const[k,v]=x.sp
 ```
 
 常见 token cookie 名：`ct0`（Twitter CSRF）、`xq_a_token`（雪球）、`SESSDATA`（B 站）、`_csrf / csrfToken`（通用）。
+
+**`document.cookie` 只能看到 non-HttpOnly 的 cookie。** 上面那条命令侦察阶段够用，真写 adapter 时 auth 经常是 HttpOnly，一定要用 `page.getCookies(...)` 从 CDP cookie jar 拿——见 `adapter-template.md` 的 "COOKIE adapter 骨架"。
+
+论坛 / BBS 引擎（Discuz!X / phpBB / vBulletin）还多一坑：auth cookie 设在**根域** `.example.com`（不是 `www.example.com`），且 HttpOnly。要查 `{ domain: '.<root>' }` **和** `{ domain: 'www.<root>' }` 两次，否则 adapter 在有 cookie 的前提下仍然 401。
 
 ### localStorage / sessionStorage 里
 

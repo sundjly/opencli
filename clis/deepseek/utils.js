@@ -15,10 +15,10 @@ export async function isOnDeepSeek(page) {
 }
 
 export async function ensureOnDeepSeek(page) {
-    if (!(await isOnDeepSeek(page))) {
-        await page.goto(DEEPSEEK_URL);
-        await page.wait(3);
-    }
+    if (await isOnDeepSeek(page)) return false;
+    await page.goto(DEEPSEEK_URL);
+    await page.wait(3);
+    return true;
 }
 
 export async function getPageState(page) {
@@ -38,31 +38,27 @@ export async function getPageState(page) {
 
 export async function selectModel(page, modelName) {
     return page.evaluate(`(() => {
-        const radios = document.querySelectorAll('div[role="radio"]');
-        for (const radio of radios) {
-            const span = radio.querySelector('span');
-            if (span && span.textContent.trim().toLowerCase() === '${modelName}'.toLowerCase()) {
-                const alreadySelected = radio.getAttribute('aria-checked') === 'true';
-                if (!alreadySelected) radio.click();
-                return { ok: true, toggled: !alreadySelected };
-            }
-        }
-        return { ok: false };
+        var radios = document.querySelectorAll('div[role="radio"]');
+        if (radios.length === 0) return { ok: false };
+        var isFirst = '${modelName}'.toLowerCase() === 'instant';
+        if (!isFirst && radios.length < 2) return { ok: false };
+        var target = isFirst ? radios[0] : radios[radios.length - 1];
+        var alreadySelected = target.getAttribute('aria-checked') === 'true';
+        if (!alreadySelected) target.click();
+        return { ok: true, toggled: !alreadySelected };
     })()`);
 }
 
 export async function setFeature(page, featureName, enabled) {
+    // Match by position: DeepThink is the first toggle, Search is the second
+    var index = featureName === 'DeepThink' ? 0 : 1;
     return page.evaluate(`(() => {
-        const btns = document.querySelectorAll('div[role="button"]');
-        for (const btn of btns) {
-            const span = btn.querySelector('span');
-            if (span && span.textContent.trim() === '${featureName}') {
-                const isActive = btn.classList.contains('ds-toggle-button--selected');
-                if (${enabled} !== isActive) btn.click();
-                return { ok: true, toggled: ${enabled} !== isActive };
-            }
-        }
-        return { ok: false };
+        var toggles = Array.from(document.querySelectorAll('.ds-toggle-button'));
+        var btn = toggles[${index}];
+        if (!btn) return { ok: false };
+        var isActive = btn.classList.contains('ds-toggle-button--selected');
+        if (${enabled} !== isActive) btn.click();
+        return { ok: true, toggled: ${enabled} !== isActive };
     })()`);
 }
 
@@ -101,7 +97,35 @@ export async function getBubbleCount(page) {
     return count || 0;
 }
 
-export async function waitForResponse(page, baselineCount, prompt, timeoutMs) {
+// Parse thinking response using text as a fallback when DOM-level extraction
+// is not available.  Does NOT split on \n\n — that heuristic silently corrupts
+// multi-paragraph thinking or multi-paragraph answers.  Instead, everything
+// after the header is treated as thinking content, and `response` stays empty
+// until the caller provides a DOM-separated answer.
+export function parseThinkingResponse(rawText) {
+    if (!rawText) return null;
+
+    // Match thinking header patterns: "Thought for X seconds" or "已思考（用时 X 秒）"
+    const thinkHeaderMatch = rawText.match(/^(Thought for ([\d.]+) seconds?|已思考（用时 ([\d.]+) 秒）)\s*/);
+
+    if (!thinkHeaderMatch) {
+        // No thinking section found, return plain response
+        return { response: rawText, thinking: null, thinking_time: null };
+    }
+
+    const thinkingTime = thinkHeaderMatch[2] || thinkHeaderMatch[3];
+    const afterHeader = rawText.slice(thinkHeaderMatch[0].length);
+
+    // Treat everything after the header as thinking.  The response will be
+    // populated by the DOM-level extraction in waitForResponse().
+    return {
+        response: '',
+        thinking: afterHeader.trim(),
+        thinking_time: thinkingTime,
+    };
+}
+
+export async function waitForResponse(page, baselineCount, prompt, timeoutMs, parseThinking = false) {
     const startTime = Date.now();
     let lastText = '';
     let stableCount = 0;
@@ -114,7 +138,51 @@ export async function waitForResponse(page, baselineCount, prompt, timeoutMs) {
             result = await page.evaluate(`(() => {
                 const bubbles = document.querySelectorAll('${MESSAGE_SELECTOR}');
                 const texts = Array.from(bubbles).map(b => (b.innerText || '').trim()).filter(Boolean);
-                return { count: texts.length, last: texts[texts.length - 1] || '' };
+                var last = texts[texts.length - 1] || '';
+
+                // DOM-level thinking/response separation.
+                // DeepSeek renders thinking in a collapsible container with a
+                // distinct class (e.g. .ds-markdown--think or similar) and the
+                // final answer in the main .ds-markdown region.  By querying
+                // these separately we avoid any text-heuristic split.
+                var thinkEl = null, answerEl = null, thinkTime = null;
+                if (${parseThinking} && bubbles.length > 0) {
+                    var lastBubble = bubbles[bubbles.length - 1];
+                    // Thinking container — DeepSeek uses various class names;
+                    // try common selectors.
+                    thinkEl = lastBubble.querySelector('.ds-markdown--think')
+                           || lastBubble.querySelector('[class*="think"]');
+                    // Final answer container — the main markdown block that is
+                    // NOT the thinking section.
+                    var markdownEls = lastBubble.querySelectorAll('.ds-markdown');
+                    for (var i = 0; i < markdownEls.length; i++) {
+                        if (markdownEls[i] !== thinkEl
+                            && !(thinkEl && thinkEl.contains(markdownEls[i]))
+                            && !markdownEls[i].classList.contains('ds-markdown--think')) {
+                            answerEl = markdownEls[i];
+                        }
+                    }
+                    // Thinking time from the toggle/header element
+                    var timeEl = lastBubble.querySelector('[class*="think"] ~ *')
+                              || lastBubble.querySelector('.ds-thinking-header');
+                    if (!timeEl) {
+                        // Fallback: parse from raw text header
+                        var m = last.match(/^(?:Thought for ([\\d.]+) seconds?|已思考（用时 ([\\d.]+) 秒）)/);
+                        if (m) thinkTime = m[1] || m[2];
+                    } else {
+                        var tm = (timeEl.textContent || '').match(/([\\d.]+)/);
+                        if (tm) thinkTime = tm[1];
+                    }
+                }
+
+                return {
+                    count: texts.length,
+                    last: last,
+                    // DOM-separated fields (null when not available)
+                    thinkText: thinkEl ? (thinkEl.innerText || '').trim() : null,
+                    answerText: answerEl ? (answerEl.innerText || '').trim() : null,
+                    thinkTime: thinkTime,
+                };
             })()`);
         } catch {
             continue;
@@ -126,7 +194,21 @@ export async function waitForResponse(page, baselineCount, prompt, timeoutMs) {
         if (candidate && result.count > baselineCount && candidate !== prompt.trim()) {
             if (candidate === lastText) {
                 stableCount++;
-                if (stableCount >= 3) return candidate;
+                if (stableCount >= 3) {
+                    if (parseThinking) {
+                        // Prefer DOM-level separation
+                        if (result.thinkText != null || result.answerText != null) {
+                            return {
+                                thinking: result.thinkText || '',
+                                response: result.answerText || '',
+                                thinking_time: result.thinkTime || null,
+                            };
+                        }
+                        // Fallback to text-header parsing (no \n\n split)
+                        return parseThinkingResponse(candidate);
+                    }
+                    return candidate;
+                }
             } else {
                 stableCount = 0;
             }
@@ -134,6 +216,9 @@ export async function waitForResponse(page, baselineCount, prompt, timeoutMs) {
         }
     }
 
+    if (parseThinking && lastText) {
+        return parseThinkingResponse(lastText);
+    }
     return lastText || null;
 }
 
@@ -167,8 +252,7 @@ export async function getConversationList(page) {
             const items = [];
             const links = document.querySelectorAll('a[href*="/a/chat/s/"]');
             links.forEach((link, i) => {
-                const titleEl = link.querySelector('div');
-                const title = titleEl ? titleEl.textContent.trim() : '';
+                const title = (link.innerText || '').trim().split('\\n')[0].trim();
                 const href = link.getAttribute('href') || '';
                 const idMatch = href.match(/\\/s\\/([a-f0-9-]+)/);
                 items.push({
