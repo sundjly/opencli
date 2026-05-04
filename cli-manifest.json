@@ -9121,6 +9121,109 @@
     "sourceFile": "imdb/trending.js"
   },
   {
+    "site": "indeed",
+    "name": "job",
+    "aliases": [
+      "detail",
+      "view"
+    ],
+    "description": "Read the full Indeed job posting by jk (job key)",
+    "access": "read",
+    "domain": "www.indeed.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "id",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Job key (16-char hex from `indeed search`, e.g. \"dccc07ac5a6a3683\")"
+      }
+    ],
+    "columns": [
+      "id",
+      "title",
+      "company",
+      "location",
+      "salary",
+      "job_type",
+      "description",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "indeed/job.js",
+    "sourceFile": "indeed/job.js",
+    "navigateBefore": false
+  },
+  {
+    "site": "indeed",
+    "name": "search",
+    "description": "Indeed keyword job search (rendered DOM via browser session, US site)",
+    "access": "read",
+    "domain": "www.indeed.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "query",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "Job keyword (title / skill / company)"
+      },
+      {
+        "name": "location",
+        "type": "string",
+        "default": "",
+        "required": false,
+        "help": "Location filter (e.g. \"remote\", \"New York, NY\", \"San Francisco\")"
+      },
+      {
+        "name": "fromage",
+        "type": "string",
+        "default": "",
+        "required": false,
+        "help": "Recency filter, days back: 1 / 3 / 7 / 14"
+      },
+      {
+        "name": "sort",
+        "type": "string",
+        "default": "relevance",
+        "required": false,
+        "help": "Sort order: relevance | date"
+      },
+      {
+        "name": "start",
+        "type": "int",
+        "default": 0,
+        "required": false,
+        "help": "Pagination offset (multiple of 10, 0-based)"
+      },
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 15,
+        "required": false,
+        "help": "Max rows to return (1-25, capped at one page)"
+      }
+    ],
+    "columns": [
+      "rank",
+      "id",
+      "title",
+      "company",
+      "location",
+      "salary",
+      "tags",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "indeed/search.js",
+    "sourceFile": "indeed/search.js",
+    "navigateBefore": false
+  },
+  {
     "site": "instagram",
     "name": "collection-create",
     "description": "Create a new Instagram saved-posts collection (folder)",
