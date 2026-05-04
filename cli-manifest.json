@@ -120,6 +120,7 @@
     ],
     "columns": [
       "rank",
+      "offer_id",
       "title",
       "price_text",
       "moq_text",
@@ -2990,6 +2991,7 @@
     ],
     "columns": [
       "rank",
+      "uri",
       "text",
       "likes",
       "reposts",
@@ -8699,6 +8701,7 @@
     ],
     "columns": [
       "rank",
+      "tid",
       "title",
       "url"
     ],
@@ -8883,6 +8886,7 @@
     ],
     "columns": [
       "rank",
+      "tid",
       "title",
       "author",
       "replies",
@@ -10262,6 +10266,7 @@
       }
     ],
     "columns": [
+      "id",
       "author",
       "content",
       "likes",
@@ -10415,6 +10420,7 @@
       }
     ],
     "columns": [
+      "id",
       "author",
       "content",
       "likes",
@@ -10489,6 +10495,7 @@
       }
     ],
     "columns": [
+      "id",
       "content",
       "type",
       "likes",
@@ -16508,7 +16515,8 @@
       "rank",
       "title",
       "discussions",
-      "description"
+      "description",
+      "url"
     ],
     "type": "js",
     "modulePath": "tieba/hot.js",
@@ -16635,10 +16643,12 @@
     ],
     "columns": [
       "rank",
+      "id",
       "title",
       "forum",
       "author",
-      "time"
+      "time",
+      "url"
     ],
     "type": "js",
     "modulePath": "tieba/search.js",
@@ -18764,6 +18774,7 @@
       }
     ],
     "columns": [
+      "id",
       "author",
       "text",
       "reposts",
@@ -18915,6 +18926,7 @@
     ],
     "columns": [
       "rank",
+      "id",
       "title",
       "author",
       "time",

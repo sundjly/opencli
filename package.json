@@ -57,6 +57,7 @@
     "test:adapter": "vitest run --project adapter",
     "test:all": "vitest run",
     "test:e2e": "vitest run --project e2e",
+    "check:listing-id-pairing": "node scripts/check-listing-id-pairing.mjs --strict",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"

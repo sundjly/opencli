@@ -16,7 +16,7 @@ cli({
         },
         { name: 'limit', type: 'int', default: 20, help: 'Number of posts' },
     ],
-    columns: ['content', 'type', 'likes', 'comments', 'time', 'url'],
+    columns: ['id', 'content', 'type', 'likes', 'comments', 'time', 'url'],
     pipeline: [
         { navigate: 'https://m.okjike.com/users/${{ args.username }}' },
         { evaluate: `(() => {
@@ -39,6 +39,7 @@ cli({
 })()
 ` },
         { map: {
+                id: '${{ item.id }}',
                 content: '${{ item.content }}',
                 type: '${{ item.type }}',
                 likes: '${{ item.likes }}',

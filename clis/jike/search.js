@@ -18,7 +18,7 @@ cli({
         { name: 'query', type: 'string', required: true, positional: true },
         { name: 'limit', type: 'int', default: 20 },
     ],
-    columns: ['author', 'content', 'likes', 'comments', 'time', 'url'],
+    columns: ['id', 'author', 'content', 'likes', 'comments', 'time', 'url'],
     func: async (page, kwargs) => {
         const keyword = kwargs.query;
         const limit = kwargs.limit || 20;
@@ -44,6 +44,7 @@ cli({
           if (!author && !content) continue;
 
           results.push({
+            id: data.id,
             author,
             content: content.replace(/\\n/g, ' ').slice(0, 120),
             likes: data.likeCount || 0,

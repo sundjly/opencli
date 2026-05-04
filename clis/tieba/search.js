@@ -93,7 +93,7 @@ cli({
         { name: 'page', type: 'int', default: 1, choices: ['1'], help: 'Page number (currently only 1 is supported)' },
         { name: 'limit', type: 'int', default: 20, help: 'Number of items to return' },
     ],
-    columns: ['rank', 'title', 'forum', 'author', 'time'],
+    columns: ['rank', 'id', 'title', 'forum', 'author', 'time', 'url'],
     func: async (page, kwargs) => {
         assertSupportedPage(kwargs);
         const limit = normalizeTiebaLimit(kwargs.limit);
