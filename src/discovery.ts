@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { type InternalCliCommand, Strategy, registerCommand } from './registry.js';
 import { getErrorMessage } from './errors.js';
 import { log } from './logger.js';
-import type { ManifestEntry } from './build-manifest.js';
+import type { ManifestEntry } from './manifest-types.js';
 import { findPackageRoot, getCliManifestPath } from './package-paths.js';
 
 /** User runtime directory: ~/.opencli */
@@ -123,6 +123,8 @@ async function loadFromManifest(manifestPath: string, clisDir: string): Promise<
         name: entry.name,
         aliases: entry.aliases,
         description: entry.description ?? '',
+        access: entry.access,
+        example: entry.example,
         domain: entry.domain,
         strategy: parseStrategy(entry.strategy),
         browser: entry.browser,

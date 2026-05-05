@@ -1,8 +1,9 @@
-import { AuthRequiredError, SelectorError } from '@jackwener/opencli/errors';
+import { AuthRequiredError, selectorError } from '@jackwener/opencli/errors';
 import { cli, Strategy } from '@jackwener/opencli/registry';
 cli({
     site: 'twitter',
     name: 'followers',
+    access: 'read',
     description: 'Get accounts following a Twitter/X user',
     domain: 'x.com',
     strategy: Strategy.INTERCEPT,
@@ -49,7 +50,7 @@ cli({
         return false;
     }`);
         if (!clicked) {
-            throw new SelectorError('Twitter followers link', 'Twitter may have changed the layout.');
+            throw selectorError('Twitter followers link', 'Twitter may have changed the layout.');
         }
         await page.waitForCapture(5);
         // 4. Scroll to trigger pagination API calls

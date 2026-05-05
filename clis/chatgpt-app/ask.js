@@ -5,6 +5,7 @@ import { activateChatGPT, getVisibleChatMessages, selectModel, MODEL_CHOICES, is
 export const askCommand = cli({
     site: 'chatgpt-app',
     name: 'ask',
+    access: 'write',
     description: 'Send a prompt and wait for the AI response (send + wait + read)',
     domain: 'localhost',
     strategy: Strategy.PUBLIC,
@@ -15,7 +16,7 @@ export const askCommand = cli({
         { name: 'timeout', required: false, help: 'Max seconds to wait for response (default: 30)', default: '30' },
     ],
     columns: ['Role', 'Text'],
-    func: async (page, kwargs) => {
+    func: async (kwargs) => {
         if (process.platform !== 'darwin') {
             throw new ConfigError('ChatGPT Desktop integration requires macOS (osascript is not available on this platform)');
         }

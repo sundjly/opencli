@@ -144,6 +144,7 @@ function parseUserTweets(data, seen) {
 cli({
     site: 'twitter',
     name: 'tweets',
+    access: 'read',
     description: "Fetch a Twitter user's most recent tweets (chronological, excludes pinned)",
     domain: 'x.com',
     strategy: Strategy.COOKIE,
@@ -152,7 +153,7 @@ cli({
         { name: 'username', type: 'string', positional: true, required: true, help: 'Twitter screen name (with or without @)' },
         { name: 'limit', type: 'int', default: 20, help: 'Max tweets to return' },
     ],
-    columns: ['author', 'created_at', 'is_retweet', 'text', 'likes', 'retweets', 'replies', 'views', 'url', 'has_media', 'media_urls'],
+    columns: ['id', 'author', 'created_at', 'is_retweet', 'text', 'likes', 'retweets', 'replies', 'views', 'url', 'has_media', 'media_urls'],
     func: async (page, kwargs) => {
         const limit = Math.max(1, Math.min(200, kwargs.limit || 20));
         const username = String(kwargs.username || '').replace(/^@/, '').trim();

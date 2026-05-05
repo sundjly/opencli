@@ -40,9 +40,10 @@ export async function selectModel(page, modelName) {
     return page.evaluate(`(() => {
         var radios = document.querySelectorAll('div[role="radio"]');
         if (radios.length === 0) return { ok: false };
-        var isFirst = '${modelName}'.toLowerCase() === 'instant';
-        if (!isFirst && radios.length < 2) return { ok: false };
-        var target = isFirst ? radios[0] : radios[radios.length - 1];
+        var name = '${modelName}'.toLowerCase();
+        var index = name === 'instant' ? 0 : name === 'expert' ? 1 : name === 'vision' ? 2 : -1;
+        if (index < 0 || index >= radios.length) return { ok: false };
+        var target = radios[index];
         var alreadySelected = target.getAttribute('aria-checked') === 'true';
         if (!alreadySelected) target.click();
         return { ok: true, toggled: !alreadySelected };
@@ -74,14 +75,18 @@ export async function sendMessage(page, prompt) {
         document.execCommand('insertText', false, ${promptJson});
         await new Promise(r => setTimeout(r, 800));
 
-        const btns = document.querySelectorAll('div[role="button"]');
-        for (const btn of btns) {
-            if (btn.getAttribute('aria-disabled') === 'false') {
-                const svgs = btn.querySelectorAll('svg');
-                if (svgs.length > 0 && btn.closest('div')?.querySelector('textarea')) {
-                    btn.click();
-                    return { ok: true };
-                }
+        // Find the send button: last non-toggle button in the textarea's container
+        var container = box.parentElement;
+        while (container && !container.querySelector('div[role="button"]')) {
+            container = container.parentElement;
+        }
+        if (container) {
+            var btns = container.querySelectorAll('div[role="button"]:not(.ds-toggle-button)');
+            var sendBtn = btns[btns.length - 1];
+            if (sendBtn && sendBtn.getAttribute('aria-disabled') === 'false'
+                && sendBtn.querySelectorAll('svg').length > 0) {
+                sendBtn.click();
+                return { ok: true };
             }
         }
 
@@ -273,9 +278,18 @@ async function waitForFilePreview(page, fileName) {
     for (let attempt = 0; attempt < 8; attempt++) {
         await page.wait(2);
         const ready = await page.evaluate(`(() => {
-            const name = ${JSON.stringify(fileName)};
-            return Array.from(document.querySelectorAll('div'))
-                .some((el) => el.children.length === 0 && (el.textContent || '').trim() === name);
+            var name = ${JSON.stringify(fileName)};
+            var hasFileName = Array.from(document.querySelectorAll('div'))
+                .some(function(el) { return el.children.length === 0 && (el.textContent || '').trim() === name; });
+            if (hasFileName) return true;
+            // Vision mode shows an image thumbnail, not filename text. Require
+            // a preview-like node here; send-button readiness is checked later.
+            var box = document.querySelector('${TEXTAREA_SELECTOR}');
+            if (!box) return false;
+            var c = box.parentElement;
+            while (c && !c.querySelector('div[role="button"]')) c = c.parentElement;
+            if (!c) return false;
+            return !!c.querySelector('img[src], canvas, video, [style*="background-image"], [class*="preview"], [class*="upload"]');
         })()`);
         if (ready) return true;
     }
@@ -314,7 +328,7 @@ export async function sendWithFile(page, filePath, prompt) {
             uploaded = true;
         } catch (err) {
             const msg = String(err?.message || err);
-            if (!msg.includes('Unknown action') && !msg.includes('not supported')) {
+            if (!msg.includes('Unknown action') && !msg.includes('not supported') && !msg.includes('Not allowed')) {
                 throw err;
             }
         }
@@ -341,7 +355,8 @@ export async function sendWithFile(page, filePath, prompt) {
             }
 
             inp.files = dt.files;
-            inp[propsKey].onChange({ target: { files: dt.files } });
+            // Use inp.files, not dt.files; assignment transfers ownership
+            inp[propsKey].onChange({ target: { files: inp.files } });
             return { ok: true };
         })()`);
         if (fallbackResult && !fallbackResult.ok) return fallbackResult;
@@ -349,6 +364,30 @@ export async function sendWithFile(page, filePath, prompt) {
 
     const ready = await waitForFilePreview(page, fileName);
     if (!ready) return { ok: false, reason: 'file preview did not appear' };
+
+    // File preview appears immediately but send button stays disabled until
+    // the server upload finishes. Wait for it.
+    let sendEnabled = false;
+    for (let tick = 0; tick < 15; tick++) {
+        const enabled = await page.evaluate(`(() => {
+            var box = document.querySelector('${TEXTAREA_SELECTOR}');
+            if (!box) return false;
+            var c = box.parentElement;
+            while (c && !c.querySelector('div[role="button"]')) c = c.parentElement;
+            if (!c) return false;
+            var btns = c.querySelectorAll('div[role="button"]:not(.ds-toggle-button)');
+            var last = btns[btns.length - 1];
+            return !!(last && last.getAttribute('aria-disabled') === 'false');
+        })()`);
+        if (enabled) {
+            sendEnabled = true;
+            break;
+        }
+        await page.wait(1);
+    }
+    if (!sendEnabled) {
+        return { ok: false, reason: 'send button did not enable after upload' };
+    }
 
     return sendMessage(page, prompt);
 }

@@ -4,6 +4,7 @@ import { PAPERREVIEW_DOMAIN, ensureSuccess, parseYesNo, requestJson, summarizeFe
 cli({
     site: 'paperreview',
     name: 'feedback',
+    access: 'write',
     description: 'Submit feedback for a paperreview.ai review token',
     domain: PAPERREVIEW_DOMAIN,
     strategy: Strategy.PUBLIC,
@@ -17,7 +18,7 @@ cli({
         { name: 'additional-comments', help: 'Optional free-text feedback' },
     ],
     columns: ['status', 'token', 'helpfulness', 'critical_error', 'actionable_suggestions', 'message'],
-    func: async (_page, kwargs) => {
+    func: async (kwargs) => {
         const token = String(kwargs.token ?? '').trim();
         if (!token) {
             throw new CliError('ARGUMENT', 'A review token is required.');

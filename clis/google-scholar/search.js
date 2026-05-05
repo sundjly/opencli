@@ -4,6 +4,7 @@ import { clampInt, requireNonEmptyQuery } from '../_shared/common.js';
 cli({
     site: 'google-scholar',
     name: 'search',
+    access: 'read',
     description: 'Google Scholar 学术搜索',
     domain: 'scholar.google.com',
     strategy: Strategy.PUBLIC,
@@ -23,7 +24,7 @@ cli({
       (() => {
         const normalize = v => (v || '').replace(/\\s+/g, ' ').trim();
         const results = [];
-        for (const el of document.querySelectorAll('.gs_r.gs_or.gs_scl, .gs_ri')) {
+        for (const el of document.querySelectorAll('.gs_r.gs_or.gs_scl')) {
           const container = el.querySelector('.gs_ri') || el;
           const titleEl = container.querySelector('.gs_rt a, h3 a');
           const title = normalize(titleEl?.textContent);

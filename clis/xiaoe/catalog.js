@@ -2,13 +2,14 @@ import { cli, Strategy } from '@jackwener/opencli/registry';
 cli({
     site: 'xiaoe',
     name: 'catalog',
+    access: 'read',
     description: '小鹅通课程目录（支持普通课程、专栏、大专栏）',
     domain: 'h5.xet.citv.cn',
     strategy: Strategy.COOKIE,
     args: [
         { name: 'url', required: true, positional: true, help: '课程页面 URL' },
     ],
-    columns: ['ch', 'chapter', 'no', 'title', 'type', 'resource_id', 'status'],
+    columns: ['ch', 'chapter', 'no', 'title', 'type', 'resource_id', 'url', 'status'],
     pipeline: [
         { navigate: '${{ args.url }}' },
         { wait: 8 },

@@ -100,6 +100,7 @@ function parseBookmarks(data, seen) {
 cli({
     site: 'twitter',
     name: 'bookmarks',
+    access: 'read',
     description: 'Fetch Twitter/X bookmarks',
     domain: 'x.com',
     strategy: Strategy.COOKIE,
@@ -107,7 +108,7 @@ cli({
     args: [
         { name: 'limit', type: 'int', default: 20 },
     ],
-    columns: ['author', 'text', 'likes', 'retweets', 'bookmarks', 'url'],
+    columns: ['id', 'author', 'text', 'likes', 'retweets', 'bookmarks', 'created_at', 'url'],
     func: async (page, kwargs) => {
         const limit = kwargs.limit || 20;
         await page.goto('https://x.com');

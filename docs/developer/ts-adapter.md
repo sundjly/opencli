@@ -12,6 +12,8 @@ cli({
   site: 'mysite',
   name: 'search',
   description: 'Search MySite',
+  access: 'read', // 'read' | 'write'
+  example: 'opencli mysite search <query> -f yaml',
   domain: 'www.mysite.com',
   strategy: Strategy.COOKIE,      // PUBLIC | COOKIE | HEADER
   args: [
@@ -46,6 +48,33 @@ cli({
   },
 });
 ```
+
+## Access Metadata
+
+Every adapter must declare `access: 'read' | 'write'`.
+
+- Use `read` when the command only retrieves data from the target product or account.
+- Use `write` when the command changes remote product/account state, such as sending messages, publishing, liking, following, buying, deleting, creating remote assets, or starting paid/credit-consuming generation.
+- `download` and `export` commands are `read` when they only read remote data and write local files; local filesystem writes are a separate permission dimension.
+
+Adapters may also declare `example` to override the canonical invocation shown in agent-facing help. Prefer YAML examples, e.g. `opencli mysite search <query> -f yaml`.
+
+## Listing↔Detail ID Pairing (advisory)
+
+If your site exposes both a listing-class command (`search` / `hot` / `top` /
+`recent` / ...) and a detail-class command (`read` / `paper` / `article` /
+`post` / `view` / ...), it's usually nicer for agents if listing rows surface
+an id-shaped column that round-trips into the detail command's positional
+arg. Without that, an agent can't follow up on a row without re-searching by
+title or scraping a URL out of band.
+
+This is a **soft convention**, not a CI gate. Many legitimate listings
+genuinely don't pair (topic-string trending, profile-attribute rows,
+UI-only sessions). Use judgment per command, not a checklist.
+
+Run `npm run advise:listing-id-pairing` to see candidate listings without an
+id column. See [Listing↔Detail ID Pairing](../conventions/listing-detail-id-pairing.md)
+for context, the full pattern table, and how to add an id to a listing.
 
 ## Strategy Types
 

@@ -8,6 +8,7 @@ import { DEFAULT_DAEMON_PORT } from '../constants.js';
 import type { BrowserSessionInfo } from '../types.js';
 import { sleep } from '../utils.js';
 import { classifyBrowserError } from './errors.js';
+import { resolveProfileContextId } from './profile.js';
 
 const DAEMON_PORT = parseInt(process.env.OPENCLI_DAEMON_PORT ?? String(DEFAULT_DAEMON_PORT), 10);
 const DAEMON_URL = `http://127.0.0.1:${DAEMON_PORT}`;
@@ -21,7 +22,7 @@ function generateId(): string {
 
 export interface DaemonCommand {
   id: string;
-  action: 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions' | 'set-file-input' | 'insert-text' | 'bind-current' | 'network-capture-start' | 'network-capture-read' | 'cdp' | 'frames';
+  action: 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window' | 'sessions' | 'set-file-input' | 'insert-text' | 'bind' | 'network-capture-start' | 'network-capture-read' | 'cdp' | 'frames';
   /** Target page identity (targetId). Cross-layer contract with the extension. */
   page?: string;
   code?: string;
@@ -46,12 +47,16 @@ export interface DaemonCommand {
   pattern?: string;
   cdpMethod?: string;
   cdpParams?: Record<string, unknown>;
-  /** When true, automation windows are created in the foreground */
+  /** When true, the owned automation container is created in the foreground */
   windowFocused?: boolean;
   /** Custom idle timeout in seconds for this workspace session. Overrides the default. */
   idleTimeout?: number;
+  /** Explicitly allow navigation inside a borrowed bound tab. */
+  allowBoundNavigation?: boolean;
   /** Frame index for cross-frame operations (0-based, from 'frames' action) */
   frameIndex?: number;
+  /** Browser profile/context to route the command to. */
+  contextId?: string;
 }
 
 export interface DaemonResult {
@@ -59,8 +64,17 @@ export interface DaemonResult {
   ok: boolean;
   data?: unknown;
   error?: string;
+  errorCode?: string;
+  errorHint?: string;
   /** Page identity (targetId) — present on page-scoped command responses */
   page?: string;
+}
+
+export class BrowserCommandError extends Error {
+  constructor(message: string, readonly code?: string, readonly hint?: string) {
+    super(message);
+    this.name = 'BrowserCommandError';
+  }
 }
 
 export interface DaemonStatus {
@@ -71,9 +85,22 @@ export interface DaemonStatus {
   extensionConnected: boolean;
   extensionVersion?: string;
   extensionCompatRange?: string;
+  contextId?: string;
+  profileRequired?: boolean;
+  profileDisconnected?: boolean;
+  profiles?: BrowserProfileStatus[];
   pending: number;
   memoryMB: number;
   port: number;
+}
+
+export interface BrowserProfileStatus {
+  contextId: string;
+  extensionConnected: boolean;
+  extensionVersion?: string;
+  extensionCompatRange?: string;
+  pending: number;
+  lastSeenAt?: number;
 }
 
 async function requestDaemon(pathname: string, init?: RequestInit & { timeout?: number }): Promise<Response> {
@@ -91,9 +118,10 @@ async function requestDaemon(pathname: string, init?: RequestInit & { timeout?: 
   }
 }
 
-export async function fetchDaemonStatus(opts?: { timeout?: number }): Promise<DaemonStatus | null> {
+export async function fetchDaemonStatus(opts?: { timeout?: number; contextId?: string }): Promise<DaemonStatus | null> {
   try {
-    const res = await requestDaemon('/status', { timeout: opts?.timeout ?? 2000 });
+    const params = opts?.contextId ? `?contextId=${encodeURIComponent(opts.contextId)}` : '';
+    const res = await requestDaemon(`/status${params}`, { timeout: opts?.timeout ?? 2000 });
     if (!res.ok) return null;
     return await res.json() as DaemonStatus;
   } catch {
@@ -104,15 +132,19 @@ export async function fetchDaemonStatus(opts?: { timeout?: number }): Promise<Da
 export type DaemonHealth =
   | { state: 'stopped'; status: null }
   | { state: 'no-extension'; status: DaemonStatus }
+  | { state: 'profile-required'; status: DaemonStatus }
+  | { state: 'profile-disconnected'; status: DaemonStatus }
   | { state: 'ready'; status: DaemonStatus };
 
 /**
  * Unified daemon health check — single entry point for all status queries.
  * Replaces isDaemonRunning(), isExtensionConnected(), and checkDaemonStatus().
  */
-export async function getDaemonHealth(opts?: { timeout?: number }): Promise<DaemonHealth> {
+export async function getDaemonHealth(opts?: { timeout?: number; contextId?: string }): Promise<DaemonHealth> {
   const status = await fetchDaemonStatus(opts);
   if (!status) return { state: 'stopped', status: null };
+  if (status.profileRequired) return { state: 'profile-required', status };
+  if (status.profileDisconnected) return { state: 'profile-disconnected', status };
   if (!status.extensionConnected) return { state: 'no-extension', status };
   return { state: 'ready', status };
 }
@@ -145,7 +177,8 @@ async function sendCommandRaw(
     const id = generateId();
     const wf = process.env.OPENCLI_WINDOW_FOCUSED;
     const windowFocused = (wf === '1' || wf === 'true') ? true : undefined;
-    const command: DaemonCommand = { id, action, ...params, ...(windowFocused && { windowFocused }) };
+    const contextId = params.contextId ?? resolveProfileContextId();
+    const command: DaemonCommand = { id, action, ...params, ...(contextId && { contextId }), ...(windowFocused && { windowFocused }) };
     try {
       const res = await requestDaemon('/command', {
         method: 'POST',
@@ -167,7 +200,7 @@ async function sendCommandRaw(
           await sleep(advice.delayMs);
           continue;
         }
-        throw new Error(result.error ?? 'Daemon command failed');
+        throw new BrowserCommandError(result.error ?? 'Daemon command failed', result.errorCode, result.errorHint);
       }
 
       return result;
@@ -207,11 +240,11 @@ export async function sendCommandFull(
   return { data: result.data, page: result.page };
 }
 
-export async function listSessions(): Promise<BrowserSessionInfo[]> {
-  const result = await sendCommand('sessions');
+export async function listSessions(opts?: { contextId?: string }): Promise<BrowserSessionInfo[]> {
+  const result = await sendCommand('sessions', { ...(opts?.contextId && { contextId: opts.contextId }) });
   return Array.isArray(result) ? result : [];
 }
 
-export async function bindCurrentTab(workspace: string, opts: { matchDomain?: string; matchPathPrefix?: string } = {}): Promise<unknown> {
-  return sendCommand('bind-current', { workspace, ...opts });
+export async function bindTab(workspace: string, opts: { matchDomain?: string; matchPathPrefix?: string; contextId?: string } = {}): Promise<unknown> {
+  return sendCommand('bind', { workspace, ...opts });
 }

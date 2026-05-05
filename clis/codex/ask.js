@@ -1,8 +1,9 @@
 import { cli, Strategy } from '@jackwener/opencli/registry';
-import { SelectorError } from '@jackwener/opencli/errors';
+import { selectorError } from '@jackwener/opencli/errors';
 export const askCommand = cli({
     site: 'codex',
     name: 'ask',
+    access: 'write',
     description: 'Send a prompt and wait for the AI response (send + wait + read)',
     domain: 'localhost',
     strategy: Strategy.UI,
@@ -34,7 +35,7 @@ export const askCommand = cli({
       })(${JSON.stringify(text)})
     `);
         if (!injected)
-            throw new SelectorError('Codex input element');
+            throw selectorError('Codex input element');
         await page.wait(0.5);
         await page.pressKey('Enter');
         // Poll for new content

@@ -26,6 +26,7 @@ function mapSearchResults(results, limit) {
 cli({
     site: 'ctrip',
     name: 'search',
+    access: 'read',
     description: '搜索携程目的地、景区和酒店联想结果',
     strategy: Strategy.PUBLIC,
     browser: false,
@@ -34,7 +35,7 @@ cli({
         { name: 'limit', type: 'int', default: 15, help: 'Number of results' },
     ],
     columns: ['rank', 'name', 'type', 'score', 'price', 'url'],
-    func: async (_page, kwargs) => {
+    func: async (kwargs) => {
         const query = String(kwargs.query || '').trim();
         if (!query) {
             throw new ArgumentError('Search keyword cannot be empty');
