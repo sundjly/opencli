@@ -16,10 +16,10 @@ export const sendCommand = cli({
     strategy: Strategy.COOKIE,
     browser: true,
     navigateBefore: false,
-    timeoutSeconds: 60,
     args: [
         { name: 'id', required: true, positional: true, help: 'Conversation ID (UUID) or full /a/chat/s/<id> URL' },
         { name: 'prompt', required: true, positional: true, help: 'Prompt to send' },
+        { name: 'timeout', type: 'int', required: false, default: 60, help: 'Max seconds for the overall command (default: 60)' },
     ],
     columns: ['Status', 'InjectedText'],
     func: async (page, kwargs) => {

@@ -194,6 +194,7 @@ export async function executeCommand(
     throw new ArgumentError(getErrorMessage(err));
   }
 
+  const userTimeoutSec = readUserTimeoutSeconds(cmd, kwargs);
   const traceMode = normalizeTraceMode(opts.trace);
 
   const hookCtx: HookContext = {
@@ -302,8 +303,11 @@ export async function executeCommand(
         // the command finishes, so agents (or humans) can inspect the page state.
         const keepOpen = process.env.OPENCLI_LIVE === '1' || process.env.OPENCLI_LIVE === 'true';
         try {
+          const browserTimeout = userTimeoutSec !== null
+            ? userTimeoutSec + RUNTIME_TIMEOUT_PADDING_SECONDS
+            : DEFAULT_BROWSER_COMMAND_TIMEOUT;
           const result = await runWithTimeout(runCommand(cmd, page, kwargs, debug), {
-            timeout: cmd.timeoutSeconds ?? DEFAULT_BROWSER_COMMAND_TIMEOUT,
+            timeout: browserTimeout,
             label: fullName(cmd),
           });
           observation?.record({
@@ -346,13 +350,16 @@ export async function executeCommand(
         }
       }, { workspace: `site:${cmd.site}:${crypto.randomUUID()}`, cdpEndpoint, contextId });
     } else {
-      // Non-browser commands: apply timeout only when explicitly configured.
-      const timeout = cmd.timeoutSeconds;
-      if (timeout !== undefined && timeout > 0) {
+      // Non-browser commands: enforce a timeout only when the command exposes
+      // a `--timeout` arg (and the resolved value is positive). Without that
+      // arg there is no meaningful default — non-browser cmds are diverse
+      // enough that a hard cap would do more harm than good.
+      if (userTimeoutSec !== null) {
+        const ceiling = userTimeoutSec + RUNTIME_TIMEOUT_PADDING_SECONDS;
         result = await runWithTimeout(runCommand(cmd, null, kwargs, debug), {
-          timeout,
+          timeout: ceiling,
           label: fullName(cmd),
-          hint: `Increase the adapter's timeoutSeconds setting (currently ${timeout}s)`,
+          hint: `Pass a higher --timeout value (currently ${userTimeoutSec}s)`,
         });
       } else {
         result = await runCommand(cmd, null, kwargs, debug);
@@ -449,4 +456,38 @@ export function prepareCommandArgs(
   const kwargs = coerceAndValidateArgs(cmd.args, rawKwargs);
   cmd.validateArgs?.(kwargs);
   return kwargs;
+}
+
+/**
+ * Runtime ceiling padding (seconds) added on top of the user's `--timeout`.
+ * The adapter's polling loop typically uses the full user value; the padding
+ * gives us room for the adapter to return + closeWindow + trace export before
+ * the runtime kills the Promise.
+ */
+const RUNTIME_TIMEOUT_PADDING_SECONDS = 30;
+
+/**
+ * Resolve the user-controllable `--timeout` arg, in seconds.
+ *
+ * Convention: a command opts into runtime-enforced timeouts by declaring an
+ * arg named `timeout`. The arg's `default` flows through `prepareCommandArgs`
+ * into `kwargs.timeout`, so by the time runtime enforcement runs, the value
+ * is the merged user-supplied-or-default seconds.
+ *
+ * Returns the parsed positive integer (seconds), or null if the command does
+ * not expose a `timeout` arg. Declaring `timeout` opts into runtime timeout
+ * enforcement, so invalid values must fail upfront instead of silently
+ * disabling the runtime ceiling.
+ */
+function readUserTimeoutSeconds(cmd: CliCommand, kwargs: CommandArgs): number | null {
+  if (!cmd.args.some(a => a.name === 'timeout')) return null;
+  const raw = kwargs.timeout;
+  if (raw === undefined || raw === null || raw === '') {
+    throw new ArgumentError(`Argument "timeout" must be a positive integer. Received: "${String(raw)}"`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new ArgumentError(`Argument "timeout" must be a positive integer. Received: "${String(raw)}"`);
+  }
+  return parsed;
 }
