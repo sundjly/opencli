@@ -68,3 +68,7 @@ opencli daemon stop      # Graceful shutdown
 ```
 
 The daemon is persistent — it stays alive until you explicitly stop it (`opencli daemon stop`) or uninstall the package.
+
+## Running OpenCLI from a remote machine
+
+If you need to run `opencli` on a remote server (CI runner, agent host) but keep the browser session on your local machine, see [Remote Orchestration](/guide/remote-orchestration). It walks through the SSH reverse-tunnel pattern so the daemon never leaves localhost.

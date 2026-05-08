@@ -130,12 +130,11 @@ async function loadFromManifest(manifestPath: string, clisDir: string): Promise<
         browser: entry.browser,
         args: entry.args ?? [],
         columns: entry.columns,
+        defaultFormat: entry.defaultFormat,
         pipeline: entry.pipeline,
-        timeoutSeconds: entry.timeout,
         source: entry.sourceFile ? path.resolve(clisDir, entry.sourceFile) : modulePath,
-        deprecated: entry.deprecated,
-        replacedBy: entry.replacedBy,
         navigateBefore: entry.navigateBefore,
+        browserSession: entry.browserSession,
         _lazy: true,
         _modulePath: modulePath,
       };
@@ -165,7 +164,6 @@ async function discoverClisFromFs(dir: string): Promise<void> {
       await Promise.all(files.map(async (file) => {
         const filePath = path.join(siteDir, file);
         if (file.endsWith('.yaml') || file.endsWith('.yml')) {
-          log.warn(`Ignoring YAML adapter ${filePath} — YAML format is no longer supported. Convert to JavaScript using cli() from '@jackwener/opencli/registry'.`);
           return;
         }
         if (file.endsWith('.ts') && !file.endsWith('.d.ts') && !file.endsWith('.test.ts')) {
@@ -208,7 +206,6 @@ async function discoverPluginDir(dir: string, site: string): Promise<void> {
   await Promise.all(files.map(async (file) => {
     const filePath = path.join(dir, file);
     if (file.endsWith('.yaml') || file.endsWith('.yml')) {
-      log.warn(`Ignoring YAML plugin ${filePath} — YAML format is no longer supported. Convert to JavaScript using cli() from '@jackwener/opencli/registry'.`);
       return;
     }
     if (file.endsWith('.js') && !file.endsWith('.d.js')) {

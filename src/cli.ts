@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import { styleText } from 'node:util';
 import { findPackageRoot, getBuiltEntryCandidates } from './package-paths.js';
 import { type CliCommand, fullName, getRegistry, strategyLabel } from './registry.js';
@@ -19,10 +19,10 @@ import { PKG_VERSION } from './version.js';
 import { printCompletionScript } from './completion.js';
 import { loadExternalClis, executeExternalCli, installExternalCli, registerExternalCli, isBinaryInstalled } from './external.js';
 import { registerAllCommands } from './commanderAdapter.js';
-import { formatRootAdapterHelpText, installStructuredHelp, rootHelpData } from './help.js';
+import { classifyAdapter, formatRootAdapterHelpText, installCommanderNamespaceStructuredHelp, installStructuredHelp, rootHelpData, type RootAdapterGroups } from './help.js';
 import { EXIT_CODES, getErrorMessage, BrowserConnectError } from './errors.js';
 import { TargetError, type TargetErrorCode } from './browser/target-errors.js';
-import { resolveTargetJs, getTextResolvedJs, getValueResolvedJs, getAttributesResolvedJs, selectResolvedJs, isAutocompleteResolvedJs, clickResolvedJs, type ResolveOptions, type TargetMatchLevel } from './browser/target-resolver.js';
+import { resolveTargetJs, getTextResolvedJs, getValueResolvedJs, getAttributesResolvedJs, selectResolvedJs, isAutocompleteResolvedJs, type ResolveOptions, type TargetMatchLevel } from './browser/target-resolver.js';
 import { buildFindJs, isFindError, type FindResult, type FindError } from './browser/find.js';
 import { inferShape } from './browser/shape.js';
 import { assignKeys } from './browser/network-key.js';
@@ -36,6 +36,7 @@ import { log } from './logger.js';
 import { bindTab, BrowserCommandError, fetchDaemonStatus, sendCommand } from './browser/daemon-client.js';
 import { aliasForContextId, loadProfileConfig, renameProfile, resolveProfileContextId, setDefaultProfile } from './browser/profile.js';
 import { formatDaemonVersion, isDaemonStale } from './browser/daemon-version.js';
+import type { IPage, ScreenshotOptions } from './types.js';
 
 const CLI_FILE = fileURLToPath(import.meta.url);
 const DEFAULT_BROWSER_WORKSPACE = 'browser:default';
@@ -377,7 +378,9 @@ async function resolveStoredBrowserTarget(page: import('./types.js').IPage, scop
 async function getBrowserPage(targetPage?: string, workspace: string = DEFAULT_BROWSER_WORKSPACE, contextId?: string): Promise<import('./types.js').IPage> {
   const { BrowserBridge } = await import('./browser/index.js');
   const bridge = new BrowserBridge();
-  const envTimeout = process.env.OPENCLI_BROWSER_TIMEOUT;
+  // Idle timeout: how long the browser workspace lease stays alive between commands
+  // (controls when the automation tab is released). Not the per-command runtime timeout.
+  const envTimeout = process.env.OPENCLI_BROWSER_IDLE_TIMEOUT;
   const idleTimeout = envTimeout ? parseInt(envTimeout, 10) : undefined;
   const page = await bridge.connect({
     timeout: 30,
@@ -438,6 +441,45 @@ function getPageScope(page: import('./types.js').IPage): string {
   return getBrowserScope(getPageWorkspace(page), typeof contextId === 'string' && contextId.trim() ? contextId.trim() : undefined);
 }
 
+type SnapshotSource = 'dom' | 'ax';
+
+function snapshotMetricText(snapshot: unknown): string {
+  return typeof snapshot === 'string' ? snapshot : JSON.stringify(snapshot, null, 2);
+}
+
+function snapshotMetrics(snapshot: unknown, elapsedMs: number): Record<string, unknown> {
+  const text = snapshotMetricText(snapshot);
+  const interactiveMatch = text.match(/^interactive:\s*(\d+)\s*$/m);
+  return {
+    ok: true,
+    chars: text.length,
+    bytes: Buffer.byteLength(text, 'utf8'),
+    lines: text ? text.split(/\r?\n/).length : 0,
+    approx_tokens: Math.ceil(text.length / 4),
+    refs: (text.match(/(^|\n)\s*\[\d+\]/g) ?? []).length,
+    frame_sections: (text.match(/(^|\n)frame /g) ?? []).length,
+    ...(interactiveMatch ? { interactive: Number(interactiveMatch[1]) } : {}),
+    elapsed_ms: elapsedMs,
+  };
+}
+
+async function snapshotSourceMetrics(page: IPage, source: SnapshotSource): Promise<Record<string, unknown>> {
+  const started = Date.now();
+  try {
+    const snapshot = await page.snapshot({ viewportExpand: 2000, source });
+    return snapshotMetrics(snapshot, Date.now() - started);
+  } catch (err) {
+    return {
+      ok: false,
+      elapsed_ms: Date.now() - started,
+      error: {
+        ...(err instanceof Error && 'code' in err ? { code: String((err as { code?: unknown }).code) } : {}),
+        message: err instanceof Error ? err.message : String(err),
+      },
+    };
+  }
+}
+
 function resolveBrowserTabTarget(targetId?: string, opts?: { tab?: string } | Command): string | undefined {
   if (typeof targetId === 'string' && targetId.trim()) return targetId.trim();
   const tab = opts instanceof Command ? opts.opts().tab : opts?.tab;
@@ -451,6 +493,17 @@ function parsePositiveIntOption(val: string | undefined, label: string, fallback
   if (Number.isNaN(parsed) || parsed <= 0) {
     console.error(`[cli] Invalid ${label}="${val}", using default ${fallback}`);
     return fallback;
+  }
+  return parsed;
+}
+
+function parseScreenshotDim(val: string, label: string): number {
+  if (!/^\d+$/.test(val)) {
+    throw new InvalidArgumentError(`--${label} must be a positive integer (got "${val}")`);
+  }
+  const parsed = parseInt(val, 10);
+  if (parsed <= 0) {
+    throw new InvalidArgumentError(`--${label} must be a positive integer (got "${val}")`);
   }
   return parsed;
 }
@@ -614,6 +667,7 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
     .command('browser')
     .option('--workspace <name>', 'Browser workspace to use (default: browser:default; bound tabs use bound:<name>)')
     .description('Browser control — navigate, click, type, extract, wait (no LLM needed)');
+  const originalBrowserDescription = browser.description();
 
   /**
    * Resolve a `<target>` (numeric ref or CSS selector) via the unified resolver.
@@ -959,9 +1013,33 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
 
   // ── Inspect ──
 
-  addBrowserTabOption(browser.command('state').description('Page state: URL, title, interactive elements with [N] indices'))
-    .action(browserAction(async (page) => {
-      const snapshot = await page.snapshot({ viewportExpand: 2000 });
+  addBrowserTabOption(browser.command('state').description('Page state: URL, title, interactive elements with [N] indices')
+    .option('--source <source>', 'Snapshot backend: dom (default) or ax prototype', 'dom')
+    .option('--compare-sources', 'Print DOM vs AX snapshot metrics for observation promotion decisions', false))
+    .action(browserAction(async (page, opts) => {
+      if (opts.compareSources === true) {
+        const [dom, ax] = await Promise.all([
+          snapshotSourceMetrics(page, 'dom'),
+          snapshotSourceMetrics(page, 'ax'),
+        ]);
+        console.log(JSON.stringify({
+          url: await page.getCurrentUrl?.() ?? '',
+          sources: { dom, ax },
+        }, null, 2));
+        return;
+      }
+      const source = String(opts.source ?? 'dom').toLowerCase();
+      if (source !== 'dom' && source !== 'ax') {
+        console.log(JSON.stringify({
+          error: {
+            code: 'invalid_source',
+            message: `--source must be "dom" or "ax", got "${opts.source}"`,
+          },
+        }, null, 2));
+        process.exitCode = EXIT_CODES.USAGE_ERROR;
+        return;
+      }
+      const snapshot = await page.snapshot({ viewportExpand: 2000, source: source as 'dom' | 'ax' });
       const url = await page.getCurrentUrl?.() ?? '';
       console.log(`URL: ${url}\n`);
       console.log(typeof snapshot === 'string' ? snapshot : JSON.stringify(snapshot, null, 2));
@@ -974,13 +1052,21 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
     }));
 
   addBrowserTabOption(browser.command('screenshot').argument('[path]', 'Save to file (base64 if omitted)'))
+    .option('--full-page', 'Capture the full scrollable page, not just the viewport', false)
+    .option('--width <n>', 'Override viewport width in CSS pixels for this screenshot only', (v: string) => parseScreenshotDim(v, 'width'))
+    .option('--height <n>', 'Override viewport height in CSS pixels for this screenshot only (ignored with --full-page)', (v: string) => parseScreenshotDim(v, 'height'))
     .description('Take screenshot')
-    .action(browserAction(async (page, path) => {
+    .action(browserAction(async (page, path, opts) => {
+      const shotOpts: ScreenshotOptions = {
+        fullPage: opts.fullPage === true,
+        width: opts.width,
+        height: opts.height,
+      };
       if (path) {
-        await page.screenshot({ path });
+        await page.screenshot({ ...shotOpts, path });
         console.log(`Screenshot saved to: ${path}`);
       } else {
-        console.log(await page.screenshot({ format: 'png' }));
+        console.log(await page.screenshot({ ...shotOpts, format: 'png' }));
       }
     }));
 
@@ -1439,6 +1525,35 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
         matches_n,
         match_level,
         autocomplete: !!isAutocomplete,
+      }, null, 2));
+    }));
+
+  addBrowserTabOption(
+    browser.command('fill')
+      .argument('<target>', 'Numeric ref (from browser state / find) or CSS selector')
+      .argument('<text>', 'Text to set exactly')
+      .option('--nth <n>', 'When <target> is a multi-match CSS selector, pick the nth match (0-based)')
+      .description('Set input/textarea/contenteditable text exactly and verify the value — JSON envelope {filled, verified, text, actual}'),
+  )
+    .action(browserAction(async (page, target, text, opts) => {
+      const parsed = nthToResolveOpts(opts?.nth);
+      if ('error' in parsed) {
+        console.log(JSON.stringify({ error: { code: 'usage_error', message: parsed.error } }, null, 2));
+        process.exitCode = EXIT_CODES.USAGE_ERROR;
+        return;
+      }
+      const result = await page.fillText(String(target), String(text), parsed.opts);
+      if (!result.verified) process.exitCode = EXIT_CODES.GENERIC_ERROR;
+      console.log(JSON.stringify({
+        filled: result.filled,
+        verified: result.verified,
+        target: String(target),
+        text: String(text),
+        actual: result.actual,
+        length: result.length,
+        matches_n: result.matches_n,
+        match_level: result.match_level,
+        ...(result.mode ? { mode: result.mode } : {}),
       }, null, 2));
     }));
 
@@ -2176,10 +2291,10 @@ cli({
 
   // ── Session ──
 
-  browser.command('close').description('Close the automation window')
+  browser.command('close').description('Release the current automation tab lease')
     .action(browserAction(async (page) => {
       await page.closeWindow?.();
-      console.log('Automation window closed');
+      console.log('Automation tab lease released');
     }));
 
   // ── Built-in: doctor / completion ──────────────────────────────────────────
@@ -2713,11 +2828,28 @@ cli({
   siteGroups.set('antigravity', antigravityCmd);
   const siteNames = registerAllCommands(program, siteGroups);
   applyRootSubcommandSummaries(program);
-  const siteNameSet = new Set(siteNames);
+
+  // ── Help-text grouping: External CLIs / App adapters / Site adapters ──
+  // Classification derives from each adapter's `domain` field — see classifyAdapter.
+  // External CLIs are taken from the externalClis registry (passthrough binaries).
+  const externalNames = externalClis.map(ext => ext.name);
+  const siteDomains = new Map<string, string | undefined>();
+  for (const [, cmd] of getRegistry()) {
+    if (!siteDomains.has(cmd.site)) siteDomains.set(cmd.site, cmd.domain);
+  }
+  const apps: string[] = [];
+  const sites: string[] = [];
+  for (const site of siteNames) {
+    if (classifyAdapter(siteDomains.get(site)) === 'app') apps.push(site);
+    else sites.push(site);
+  }
+  const adapterGroups: RootAdapterGroups = { external: externalNames, apps, sites };
+  const adapterNameSet = new Set<string>([...externalNames, ...siteNames]);
+  installCommanderNamespaceStructuredHelp(browser, { globalCommand: program, description: originalBrowserDescription });
   program.configureHelp({
-    visibleCommands: (command) => command.commands.filter(child => command !== program || !siteNameSet.has(child.name())),
+    visibleCommands: (command) => command.commands.filter(child => command !== program || !adapterNameSet.has(child.name())),
   });
-  installStructuredHelp(program, () => rootHelpData(program, siteNames), () => formatRootAdapterHelpText(siteNames));
+  installStructuredHelp(program, () => rootHelpData(program, adapterGroups), () => formatRootAdapterHelpText(adapterGroups));
 
   // ── Unknown command fallback ──────────────────────────────────────────────
   // Security: do NOT auto-discover and register arbitrary system binaries.

@@ -8,7 +8,6 @@ export enum Strategy {
   PUBLIC = 'public',
   LOCAL = 'local',
   COOKIE = 'cookie',
-  HEADER = 'header',
   INTERCEPT = 'intercept',
   UI = 'ui',
 }
@@ -24,15 +23,21 @@ export interface Arg {
   choices?: string[];
 }
 
-export interface RequiredEnv {
-  name: string;
-  help?: string;
-}
-
 export type CommandArgs = Record<string, any>;
 export type BrowserCommandFunc = (page: IPage, kwargs: CommandArgs, debug?: boolean) => Promise<unknown>;
 export type NonBrowserCommandFunc = (kwargs: CommandArgs, debug?: boolean) => Promise<unknown>;
 export type CommandAccess = 'read' | 'write';
+export type BrowserSessionReuse = 'none' | 'site';
+
+export interface BrowserSessionOptions {
+  /**
+   * Control whether browser-backed adapter commands reuse a stable tab lease.
+   *
+   * - `none`: one-shot workspace per command execution (default)
+   * - `site`: all commands for this site share `site:<site>` until idle expiry
+   */
+  reuse?: BrowserSessionReuse;
+}
 
 interface BaseCliCommand {
   site: string;
@@ -47,16 +52,10 @@ interface BaseCliCommand {
   args: Arg[];
   columns?: string[];
   pipeline?: Record<string, unknown>[];
-  timeoutSeconds?: number;
   /** Origin of this command: 'yaml', 'ts', or plugin name. */
   source?: string;
   footerExtra?: (kwargs: CommandArgs) => string | undefined;
-  requiredEnv?: RequiredEnv[];
   validateArgs?: (kwargs: CommandArgs) => void;
-  /** Deprecation note shown in help / execution warnings. */
-  deprecated?: boolean | string;
-  /** Preferred replacement command, if any. */
-  replacedBy?: string;
   /**
    * Control pre-navigation and browser-session requirement.
    *
@@ -73,6 +72,8 @@ interface BaseCliCommand {
    * Adapter authors can set this explicitly to override the strategy-based default.
    */
   navigateBefore?: boolean | string;
+  /** Browser session lifecycle defaults for adapter commands. */
+  browserSession?: BrowserSessionOptions;
   /** Override the default CLI output format when the user does not pass -f/--format. */
   defaultFormat?: 'table' | 'plain' | 'json' | 'yaml' | 'yml' | 'md' | 'markdown' | 'csv';
 }
@@ -135,6 +136,7 @@ export function cli(opts: CliOptions): CliCommand {
     aliases: opts.aliases,
     description: opts.description ?? '',
     access: opts.access,
+    example: opts.example,
     domain: opts.domain,
     strategy: opts.strategy,
     browser: opts.browser,
@@ -142,12 +144,9 @@ export function cli(opts: CliOptions): CliCommand {
     columns: opts.columns,
     func: opts.func,
     pipeline: opts.pipeline,
-    timeoutSeconds: opts.timeoutSeconds,
     footerExtra: opts.footerExtra,
-    requiredEnv: opts.requiredEnv,
-    deprecated: opts.deprecated,
-    replacedBy: opts.replacedBy,
     navigateBefore: opts.navigateBefore,
+    browserSession: opts.browserSession,
     defaultFormat: opts.defaultFormat,
   };
 
@@ -182,13 +181,14 @@ export function strategyLabel(cmd: CliCommand): string {
  */
 function normalizeCommand(cmd: RawCliCommand): CliCommand {
   assertCommandAccess(cmd);
+  assertBrowserSessionOptions(cmd);
 
   const strategy = cmd.strategy ?? (cmd.browser === false ? Strategy.PUBLIC : Strategy.COOKIE);
   const browser = cmd.browser ?? (strategy !== Strategy.PUBLIC && strategy !== Strategy.LOCAL);
 
   let navigateBefore = cmd.navigateBefore;
   if (navigateBefore === undefined) {
-    if ((strategy === Strategy.COOKIE || strategy === Strategy.HEADER) && cmd.domain) {
+    if (strategy === Strategy.COOKIE && cmd.domain) {
       navigateBefore = `https://${cmd.domain}`;
     } else if (strategy !== Strategy.PUBLIC && strategy !== Strategy.LOCAL) {
       // Non-PUBLIC without domain: needs authenticated browser context
@@ -207,6 +207,18 @@ function assertCommandAccess(cmd: Pick<RawCliCommand, 'site' | 'name'> & { acces
   if (cmd.access === 'read' || cmd.access === 'write') return;
   const key = `${cmd.site}/${cmd.name}`;
   throw new Error(`Command ${key} must declare access: 'read' | 'write'`);
+}
+
+function assertBrowserSessionOptions(cmd: Pick<RawCliCommand, 'site' | 'name'> & { browserSession?: unknown }): void {
+  if (cmd.browserSession === undefined) return;
+  const key = `${cmd.site}/${cmd.name}`;
+  if (cmd.browserSession === null || typeof cmd.browserSession !== 'object' || Array.isArray(cmd.browserSession)) {
+    throw new Error(`Command ${key} browserSession must be an object`);
+  }
+  const reuse = (cmd.browserSession as BrowserSessionOptions).reuse;
+  if (reuse !== undefined && reuse !== 'none' && reuse !== 'site') {
+    throw new Error(`Command ${key} browserSession.reuse must be one of: none, site`);
+  }
 }
 
 export function registerCommand(cmd: RawCliCommand): void {

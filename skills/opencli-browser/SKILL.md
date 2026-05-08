@@ -130,6 +130,8 @@ Error envelope always includes `error.code` and `error.message`. Target errors (
 | command | purpose |
 |---------|---------|
 | `browser state` | Snapshot: text tree with `[N]` refs, scroll hints, hidden-interactive hints, `compounds (N):` sidecar for date/select/file refs. |
+| `browser state --source ax` | Opt-in accessibility-tree snapshot. Use when custom controls, portals, or same-origin iframes are hard to identify in normal `state`. AX refs can recover stale React re-renders by role/name/nth. |
+| `browser state --compare-sources` | Metrics-only DOM vs AX comparison for deciding whether AX should become default. It prints counts and sizes, not page text, so it is safer to share for validation. |
 | `browser find --css <sel> [--limit N] [--text-max N]` | Run a CSS query and return one entry per match with `{nth, ref, tag, role, text, attrs, visible, compound?}`. Allocates refs for matches the prior snapshot didn't tag. Cheap alternative to `state` when you already know the selector. |
 | `browser frames` | List cross-origin iframe targets. Pass the index to `--frame` on `eval`. |
 | `browser screenshot [path]` | Viewport PNG. No path → base64 to stdout. Prefer `state` when you just need structure. |
@@ -151,6 +153,7 @@ Error envelope always includes `error.code` and `error.message`. Target errors (
 |---------|-------|
 | `browser click <target> [--nth N]` | Returns `{clicked, target, matches_n, match_level}`. |
 | `browser type <target> <text> [--nth N]` | Clicks first, then types. Returns `{typed, text, target, matches_n, match_level, autocomplete}`. `autocomplete: true` means a combobox/datalist popup appeared after typing — you almost always need `keys Enter` or a follow-up `click` on the suggestion to commit the value. |
+| `browser fill <target> <text> [--nth N]` | Exact replacement for input, textarea, and contenteditable targets. Returns `{filled, verified, text, actual, matches_n, match_level}`. Use this when you need raw text set and verified, not keyboard/autocomplete behavior. Pipeline form supports `{ fill: { ref, text, submit: true } }`. |
 | `browser select <target> <option> [--nth N]` | Matches option by label first, then value. Use `compound` from `find`/`state` to see exactly what labels are available. |
 | `browser keys <key>` | `Enter`, `Escape`, `Tab`, `Control+a`, etc. Runs against the focused element. |
 | `browser scroll <direction> [--amount px]` | `up` / `down`. Default amount `500`. |
@@ -167,7 +170,7 @@ Default timeout `10000` ms. SPA routes, login redirects, and lazy-loaded lists n
 
 ### Extract
 
-- **`web read --url <url>`** — One-shot Markdown reader for arbitrary pages. It expands same-origin iframes by default, so old iframe-shell sites work better than with a top-document-only scrape. For AJAX shell pages use `opencli web read --url <url> --wait-for "<selector>" --wait-until networkidle --diagnose`; diagnostics show frame URLs, empty containers, and API-like XHRs. If the value you need is table/API data, switch to `browser network` or a dedicated adapter instead of relying on Markdown.
+- **`web read --url <url>`** — One-shot Markdown reader for arbitrary pages. It expands relevant same-origin iframes by default, so old iframe-shell sites work better than with a top-document-only scrape. Use `--frames all-same-origin` when completeness matters more than Markdown noise. For AJAX shell pages use `opencli web read --url <url> --wait-for "<selector>" --wait-until networkidle --diagnose`; diagnostics show frame URLs, empty containers, and API-like XHRs. If the value you need is table/API data, switch to `browser network` or a dedicated adapter instead of relying on Markdown.
 - **`browser eval <js> [--frame N]`** — Run an expression in the page (or in a cross-origin frame via `--frame`). Wrap in an IIFE and return JSON. Read-only: no `document.forms[0].submit()`, no clicks, no navigations. If the result is a string, stdout is the raw string; otherwise it's JSON.
 - **`browser extract [--selector <css>] [--chunk-size N] [--start N]`** — Markdown extraction of long-form content with a continuation cursor. Returns `{url, title, selector, total_chars, chunk_size, start, end, next_start_char, content}`. Loop on `next_start_char` until it is `null`. Auto-scopes to `<main>`/`<article>`/`<body>` if you don't pass `--selector`.
 
@@ -320,6 +323,38 @@ opencli browser find --css "select[name=country]"
 opencli browser select 12 "Uruguay"
 opencli browser get value 12                   # { value: "uy", match_level: "exact" }
 ```
+
+### Pick from a custom React dropdown
+
+Use this for Radix, shadcn, Material UI, Mercury-style category fields, and
+other controls that are not native `<select>`.
+
+```bash
+opencli browser state                          # find category trigger ref
+# If the trigger/option is not clear, use AX:
+opencli browser state --source ax              # look for combobox/button/listbox/option names
+opencli browser click 7                        # click category trigger
+opencli browser state --source ax              # fresh refs after the portal/listbox opens
+opencli browser click 12                       # click option
+opencli browser get text 7                     # verify visible selected label
+```
+
+Do not use `browser select` on these widgets. `browser select` is only for
+native `<select>` elements. Custom dropdowns should be driven with
+`state -> click trigger -> state -> click option -> verify`.
+
+### Compare DOM vs AX observation
+
+When deciding whether AX refs are better for a page, collect metrics without
+sharing page contents:
+
+```bash
+opencli browser state --compare-sources
+```
+
+Report `sources.dom.refs`, `sources.ax.refs`, `frame_sections`,
+`approx_tokens`, `elapsed_ms`, and any per-source `error`. Use this before
+arguing that AX should become the default on a site.
 
 ### Scrape a list via network instead of DOM
 

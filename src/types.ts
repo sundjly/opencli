@@ -22,6 +22,8 @@ export interface SnapshotOptions {
   raw?: boolean;
   viewportExpand?: number;
   maxTextLength?: number;
+  /** Observation backend. `dom` is the stable default; `ax` is an opt-in prototype. */
+  source?: 'dom' | 'ax';
 }
 
 export interface WaitOptions {
@@ -35,6 +37,10 @@ export interface ScreenshotOptions {
   format?: 'png' | 'jpeg';
   quality?: number;
   fullPage?: boolean;
+  /** Override viewport width in CSS pixels for the screenshot only (cleared after). */
+  width?: number;
+  /** Override viewport height in CSS pixels for the screenshot only (ignored when fullPage). */
+  height?: number;
   path?: string;
 }
 
@@ -75,6 +81,16 @@ export interface IPage {
   snapshot(opts?: SnapshotOptions): Promise<any>;
   click(ref: string, opts?: { nth?: number; firstOnMulti?: boolean }): Promise<{ matches_n: number; match_level: 'exact' | 'stable' | 'reidentified' }>;
   typeText(ref: string, text: string, opts?: { nth?: number; firstOnMulti?: boolean }): Promise<{ matches_n: number; match_level: 'exact' | 'stable' | 'reidentified' }>;
+  fillText(ref: string, text: string, opts?: { nth?: number; firstOnMulti?: boolean }): Promise<{
+    filled: boolean;
+    verified: boolean;
+    expected: string;
+    actual: string;
+    length: number;
+    matches_n: number;
+    match_level: 'exact' | 'stable' | 'reidentified';
+    mode?: 'input' | 'textarea' | 'contenteditable';
+  }>;
   pressKey(key: string): Promise<void>;
   scrollTo(ref: string, opts?: { nth?: number; firstOnMulti?: boolean }): Promise<any>;
   getFormState(): Promise<any>;

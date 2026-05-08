@@ -15,7 +15,7 @@ cli({
   access: 'read', // 'read' | 'write'
   example: 'opencli mysite search <query> -f yaml',
   domain: 'www.mysite.com',
-  strategy: Strategy.COOKIE,      // PUBLIC | COOKIE | HEADER
+  strategy: Strategy.COOKIE,      // PUBLIC | COOKIE | INTERCEPT | UI
   args: [
     { name: 'query', required: true, help: 'Search query' },
     { name: 'limit', type: 'int', default: 10, help: 'Max results' },
@@ -82,7 +82,28 @@ for context, the full pattern table, and how to add an id to a listing.
 |----------|----------|----------|
 | Public | `Strategy.PUBLIC` | No auth needed |
 | Cookie | `Strategy.COOKIE` | Browser session cookies |
-| Header | `Strategy.HEADER` | Custom headers/tokens |
+| Intercept | `Strategy.INTERCEPT` | Capture browser requests/responses |
+| UI | `Strategy.UI` | Drive authenticated browser UI |
+
+## Browser Session Reuse
+
+Browser-backed commands are one-shot by default: each execution gets a fresh
+tab lease and releases it when the command returns. For interactive sites where
+successive commands should continue in the same page, opt into site-level reuse:
+
+```typescript
+cli({
+  site: 'mysite',
+  name: 'ask',
+  strategy: Strategy.COOKIE,
+  browserSession: { reuse: 'site' },
+  // ...
+});
+```
+
+`reuse: 'site'` makes commands for the same site share `site:<site>` and use the
+interactive idle timeout. Users can override the adapter default with
+`--reuse none` or force reuse with `--reuse site`.
 
 ## The `page` Object
 

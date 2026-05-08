@@ -9,13 +9,14 @@ Fetch the latest and greatest developer articles from the DEV community without 
 | Command | Description |
 |---------|-------------|
 | `opencli devto top` | Top DEV.to articles of the day |
+| `opencli devto latest` | Latest published articles across all tags (paginated) |
 | `opencli devto tag <tag>` | Latest articles for a specific tag |
 | `opencli devto user <username>` | Recent articles from a specific user |
 | `opencli devto read <id>` | Read the body of a single article |
 
 ## Listing columns
 
-`top`, `tag`, and `user` all surface the same agent-native columns so the
+`top`, `latest`, `tag`, and `user` all surface the same agent-native columns so the
 article id is round-trippable into `devto read`:
 
 | Column | Source | Notes |
@@ -53,6 +54,10 @@ does not expose article comments, so this reader does not emit a comment tree.
 ```bash
 # Top articles today
 opencli devto top --limit 5
+
+# Latest published articles (newest first; supports --page for pagination)
+opencli devto latest --limit 20
+opencli devto latest --limit 20 --page 2
 
 # Articles by tag (positional argument)
 opencli devto tag javascript

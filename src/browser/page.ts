@@ -150,7 +150,7 @@ export class Page extends BasePage {
     return Array.isArray(result) ? result : [];
   }
 
-  /** Close the automation window in the extension */
+  /** Release the current automation tab lease in the extension */
   async closeWindow(): Promise<void> {
     try {
       await sendCommand('close-window', { ...this._wsOpt() });
@@ -213,6 +213,8 @@ export class Page extends BasePage {
       format: options.format,
       quality: options.quality,
       fullPage: options.fullPage,
+      width: options.width,
+      height: options.height,
     }) as string;
 
     if (options.path) {
@@ -374,6 +376,11 @@ export class Page extends BasePage {
   }
 
   async nativeClick(x: number, y: number): Promise<void> {
+    await this.cdp('Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x,
+      y,
+    });
     await this.cdp('Input.dispatchMouseEvent', {
       type: 'mousePressed',
       x, y,

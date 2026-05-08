@@ -11,7 +11,7 @@
 OpenCLI gives you one surface for three different kinds of automation:
 
 - **Use built-in adapters** for sites like Bilibili, Zhihu, Xiaohongshu, Reddit, HackerNews, Twitter/X, and [many more](#built-in-commands).
-- **Let AI Agents operate any website** — install the `opencli-adapter-author` skill in your AI agent (Claude Code, Cursor, etc.), and it can navigate, click, type, extract, and inspect any page through your logged-in browser via `opencli browser` primitives.
+- **Let AI Agents operate any website** — install the `opencli-adapter-author` skill in your AI agent (Claude Code, Cursor, etc.), and it can navigate, click, type/fill, extract, and inspect any page through your logged-in browser via `opencli browser` primitives.
 - **Write new adapters** end-to-end with `opencli browser` + the `opencli-adapter-author` skill, which guides from first recon through field decoding, code, and `opencli browser verify`.
 
 It also works as a **CLI hub** for local tools such as `gh`, `docker`, and other binaries you register yourself, plus **desktop app adapters** for Electron apps like Cursor, Codex, Antigravity, ChatGPT, and Notion.
@@ -19,7 +19,7 @@ It also works as a **CLI hub** for local tools such as `gh`, `docker`, and other
 ## Highlights
 
 - **Desktop App Control** — Drive Electron apps (Cursor, Codex, ChatGPT, Notion, etc.) directly from the terminal via CDP.
-- **Browser Automation for AI Agents** — Install the `opencli-adapter-author` skill, and your AI agent can operate any website: navigate, click, type, extract, screenshot — all through your logged-in Chrome session.
+- **Browser Automation for AI Agents** — Install the `opencli-adapter-author` skill, and your AI agent can operate any website: navigate, click, type/fill, extract, screenshot — all through your logged-in Chrome session.
 - **Multi-profile Browser Bridge** — Install the extension in each Chrome profile you want to use, then route commands with `--profile`, `OPENCLI_PROFILE`, or `opencli profile use`.
 - **Website → CLI** — Turn any website into a deterministic CLI: 100+ site surfaces are already registered, or write your own with the `opencli-adapter-author` skill + `opencli browser verify`.
 - **Account-safe** — Reuses Chrome/Chromium logged-in state; your credentials never leave the browser.
@@ -150,7 +150,7 @@ The agent handles all the `opencli browser` commands internally — you just des
 - [`skills/opencli-usage/SKILL.md`](./skills/opencli-usage/SKILL.md) — command and site reference
 - [`skills/smart-search/SKILL.md`](./skills/smart-search/SKILL.md) — capability search
 
-Available browser commands include `open`, `state`, `click`, `type`, `select`, `keys`, `wait`, `get`, `find`, `extract`, `frames`, `screenshot`, `scroll`, `back`, `eval`, `network`, `tab list`, `tab new`, `tab select`, `tab close`, `init`, `verify`, and `close`.
+Available browser commands include `open`, `state`, `click`, `type`, `fill`, `select`, `keys`, `wait`, `get`, `find`, `extract`, `frames`, `screenshot`, `scroll`, `back`, `eval`, `network`, `tab list`, `tab new`, `tab select`, `tab close`, `init`, `verify`, and `close`.
 
 `opencli browser open <url>` and `opencli browser tab new [url]` both return a target ID. Use `opencli browser tab list` to inspect the target IDs of tabs that already exist, then pass `--tab <targetId>` to route a command to a specific tab. `tab new` creates a new tab without changing the default browser target; only `tab select <targetId>` promotes that tab to the default target for later untargeted `opencli browser ...` commands.
 
@@ -172,7 +172,7 @@ When the site you need is not yet covered, use the `opencli-adapter-author` skil
 
 1. Recon the site and classify its pattern (SPA / SSR / JSONP / Token / Streaming).
 2. Discover the right endpoint — network inspection, initial state, bundle search, token trace, or interceptor fallback.
-3. Decide the auth strategy — `PUBLIC` / `COOKIE` / `HEADER` / `INTERCEPT`.
+3. Decide the auth strategy — `PUBLIC` / `COOKIE` / `INTERCEPT` / `UI` / `LOCAL`.
 4. Decode response fields and design output columns.
 5. `opencli browser analyze <url>` for one-shot recon, then `opencli browser init <site>/<name>` → write adapter → `opencli browser verify <site>/<name>`.
 6. Persist site knowledge to `~/.opencli/sites/<site>/` so the next adapter for the same site is faster.
@@ -200,6 +200,7 @@ OpenCLI is not only for websites. It can also:
 | `OPENCLI_PROFILE` | — | Browser Bridge profile alias/contextId to use when multiple Chrome profiles are connected |
 | `OPENCLI_WINDOW_FOCUSED` | `false` | Set to `1` to open the automation container in the foreground (useful for debugging). The `--focus` flag sets this. |
 | `OPENCLI_LIVE` | `false` | Set to `1` to keep the automation lease open after an adapter command finishes (useful for inspection). The `--live` flag sets this. |
+| `OPENCLI_BROWSER_REUSE` | adapter default | Set to `none` or `site` to override adapter browser tab reuse. The `--reuse <none\|site>` flag sets this. |
 | `OPENCLI_BROWSER_CONNECT_TIMEOUT` | `30` | Seconds to wait for browser connection |
 | `OPENCLI_BROWSER_COMMAND_TIMEOUT` | `60` | Seconds to wait for a single browser command |
 | `OPENCLI_CDP_ENDPOINT` | — | Chrome DevTools Protocol endpoint for remote browser or Electron apps |
@@ -207,7 +208,7 @@ OpenCLI is not only for websites. It can also:
 | `OPENCLI_VERBOSE` | `false` | Enable verbose logging (`-v` flag also works) |
 | `DEBUG_SNAPSHOT` | — | Set to `1` for DOM snapshot debug output |
 
-`--focus` works for both `opencli browser *` and browser-backed adapter commands. `--live` is mainly for adapter commands: browser subcommands already keep the automation lease open until you run `opencli browser close` or the idle timeout expires.
+`--focus` works for both `opencli browser *` and browser-backed adapter commands. `--live` is mainly for adapter commands: browser subcommands already keep the automation lease open until you run `opencli browser close` or the idle timeout expires. Some interactive adapters default to `--reuse site` so repeated commands continue in the same site tab; pass `--reuse none` for a one-shot tab.
 
 ## Update
 
@@ -264,7 +265,7 @@ To load the source Browser Bridge extension:
 | **yuanbao** | `new` `ask` |
 | **notebooklm** | `status` `list` `open` `current` `get` `history` `summary` `note-list` `notes-get` `source-list` `source-get` `source-fulltext` `source-guide` |
 | **spotify** | `auth` `status` `play` `pause` `next` `prev` `volume` `search` `queue` `shuffle` `repeat` |
-| **xianyu** | `search` `item` `chat` |
+| **xianyu** | `search` `item` `chat` `publish` |
 | **xiaoe** | `courses` `detail` `catalog` `play-url` `content` |
 | **quark** | `ls` `mkdir` `mv` `rename` `rm` `save` `share-tree` |
 | **uiverse** | `code` `preview` |
@@ -406,7 +407,7 @@ Before writing any adapter code, read the [`opencli-adapter-author` skill](./ski
 
 - Recon the site and pick a pattern (SPA / SSR / JSONP / Token / Streaming).
 - Discover the right endpoint via `opencli browser network`, `eval`, or the interceptor fallback.
-- Decide auth strategy (`PUBLIC` / `COOKIE` / `HEADER` / `INTERCEPT`).
+- Decide auth strategy (`PUBLIC` / `COOKIE` / `INTERCEPT` / `UI` / `LOCAL`).
 - Run `opencli browser analyze <url>` for one-shot recon, decode response fields, design columns, scaffold with `opencli browser init`.
 - Verify with `opencli browser verify <site>/<name>` before shipping.
 
