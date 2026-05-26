@@ -1,5 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
-import { __test__, waitForChatGPTImages } from './utils.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { JSDOM } from 'jsdom';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { __test__, getChatGPTImageAssets, getChatGPTVisibleImageUrls, prepareChatGPTImagePaths, sendChatGPTMessage, uploadChatGPTImages, waitForChatGPTImages } from './utils.js';
+
+const tempDirs = [];
+
+afterEach(() => {
+    vi.restoreAllMocks();
+    while (tempDirs.length) {
+        fs.rmSync(tempDirs.pop(), { recursive: true, force: true });
+    }
+});
 
 function createPageMock({ location = '', generating = [], imageUrls = [] } = {}) {
     let generatingIndex = 0;
@@ -72,5 +85,246 @@ describe('chatgpt conversation id parsing', () => {
     it('rejects invalid detail ids', () => {
         expect(() => __test__.parseChatGPTConversationId('')).toThrow(/conversation id/);
         expect(() => __test__.parseChatGPTConversationId('https://chatgpt.com/')).toThrow(/conversation id/);
+    });
+});
+
+describe('chatgpt send selectors', () => {
+    it('inlines the composer locator without returning before caller code runs', () => {
+        const dom = new JSDOM('<!doctype html><div id="prompt-textarea" contenteditable="true"></div>', {
+            url: 'https://chatgpt.com/',
+            runScripts: 'outside-only',
+        });
+        const composer = dom.window.document.querySelector('#prompt-textarea');
+        composer.getBoundingClientRect = () => ({ width: 320, height: 48 });
+
+        const result = dom.window.eval(`
+            (() => {
+                ${__test__.buildComposerLocatorScript()}
+                const composer = findComposer();
+                return !!composer && composer.getAttribute(markerAttr) === '1';
+            })()
+        `);
+
+        expect(result).toBe(true);
+    });
+
+    it('keeps locale-independent send-button selector before aria-label fallbacks', async () => {
+        const page = {
+            wait: vi.fn().mockResolvedValue(undefined),
+            nativeType: vi.fn().mockResolvedValue(undefined),
+            evaluate: vi.fn((script) => {
+                if (script.includes('findComposer')) return Promise.resolve(true);
+                if (script.includes('sendBtnFound')) {
+                    expect(script).toContain('data-testid=\\\"send-button\\\"');
+                    return Promise.resolve({ sendBtnFound: true });
+                }
+                if (script.includes('if (sendBtn) sendBtn.click')) {
+                    expect(script).toContain('data-testid=\\\"send-button\\\"');
+                }
+                return Promise.resolve(undefined);
+            }),
+        };
+
+        await expect(sendChatGPTMessage(page, 'hello')).resolves.toBe(true);
+    });
+
+    it('uses the composer submit fallback consistently for readiness and click', async () => {
+        const page = {
+            wait: vi.fn().mockResolvedValue(undefined),
+            nativeType: vi.fn().mockResolvedValue(undefined),
+            evaluate: vi.fn((script) => {
+                if (script.includes('findComposer')) return Promise.resolve(true);
+                if (script.includes('sendBtnFound')) {
+                    expect(script).toContain('#composer-submit-button:not([disabled])');
+                    return Promise.resolve({ sendBtnFound: true });
+                }
+                if (script.includes('if (sendBtn) sendBtn.click')) {
+                    expect(script).toContain('#composer-submit-button:not([disabled])');
+                }
+                return Promise.resolve(undefined);
+            }),
+        };
+
+        await expect(sendChatGPTMessage(page, 'hello')).resolves.toBe(true);
+    });
+
+    it('keeps zh-CN aria and placeholder fallbacks without replacing English selectors', () => {
+        expect(__test__.COMPOSER_SELECTORS).toEqual(expect.arrayContaining([
+            '[aria-label="Chat with ChatGPT"]',
+            '[aria-label="与 ChatGPT 聊天"]',
+            '[placeholder="Ask anything"]',
+            '[placeholder="有问题，尽管问"]',
+            '[data-testid="prompt-textarea"]',
+        ]));
+        expect(__test__.SEND_BUTTON_SELECTOR).toBe('button[data-testid="send-button"]:not([disabled])');
+        expect(__test__.SEND_BUTTON_FALLBACK_SELECTORS).toContain('#composer-submit-button:not([disabled])');
+        expect(__test__.SEND_BUTTON_LABELS).toEqual(expect.arrayContaining(['Send prompt', 'Send message', 'Send', '发送提示']));
+        expect(__test__.CLOSE_SIDEBAR_LABELS).toEqual(expect.arrayContaining(['Close sidebar', '关闭边栏']));
+    });
+});
+
+describe('chatgpt generated image detection', () => {
+    function createDomPage(html, setup = () => {}) {
+        const dom = new JSDOM(html, {
+            url: 'https://chatgpt.com/c/demo',
+            runScripts: 'outside-only',
+        });
+        setup(dom.window);
+        return {
+            evaluate: vi.fn((script) => Promise.resolve(dom.window.eval(String(script)))),
+        };
+    }
+
+    it('detects visible CSS background images when ChatGPT does not render a plain img', async () => {
+        const page = createDomPage(`
+            <!doctype html>
+            <main>
+              <div class="avatar" style="background-image: url('https://chatgpt.com/avatar.png')"></div>
+              <button data-testid="generated-image" style="background-image: url('/backend-api/generated/foo.webp')"></button>
+            </main>
+        `, (window) => {
+            for (const el of window.document.querySelectorAll('div, button')) {
+                el.getBoundingClientRect = () => ({ width: 512, height: 512 });
+            }
+        });
+
+        await expect(getChatGPTVisibleImageUrls(page)).resolves.toEqual([
+            'https://chatgpt.com/backend-api/generated/foo.webp',
+        ]);
+    });
+
+    it('detects visible generated canvases as data URLs', async () => {
+        const page = createDomPage('<!doctype html><canvas width="512" height="512"></canvas>', (window) => {
+            const canvas = window.document.querySelector('canvas');
+            canvas.getBoundingClientRect = () => ({ width: 512, height: 512 });
+            canvas.toDataURL = () => 'data:image/png;base64,ZmFrZQ==';
+        });
+
+        await expect(getChatGPTVisibleImageUrls(page)).resolves.toEqual([
+            'data:image/png;base64,ZmFrZQ==',
+        ]);
+    });
+
+    it('exports assets for generated CSS background images', async () => {
+        const imageUrl = 'https://chatgpt.com/backend-api/generated/foo.webp';
+        const page = createDomPage(`
+            <!doctype html>
+            <button style="background-image: url('/backend-api/generated/foo.webp')"></button>
+        `, (window) => {
+            const button = window.document.querySelector('button');
+            button.getBoundingClientRect = () => ({ width: 512, height: 512 });
+            window.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                blob: async () => new window.Blob(['fake-image'], { type: 'image/webp' }),
+            });
+        });
+
+        await expect(getChatGPTImageAssets(page, [imageUrl])).resolves.toEqual([
+            expect.objectContaining({
+                url: imageUrl,
+                mimeType: 'image/webp',
+                width: 512,
+                height: 512,
+            }),
+        ]);
+    });
+});
+
+describe('chatgpt image upload helper', () => {
+    it('validates local images without a browser page', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-chatgpt-'));
+        tempDirs.push(dir);
+        const filePath = path.join(dir, 'cat.png');
+        fs.writeFileSync(filePath, 'fake-png');
+
+        await expect(prepareChatGPTImagePaths([filePath])).resolves.toEqual({ ok: true, paths: [filePath] });
+        await expect(prepareChatGPTImagePaths([path.join(dir, 'missing.png')])).resolves.toMatchObject({
+            ok: false,
+            reason: expect.stringContaining('Image not found'),
+        });
+    });
+
+    it('prefers Browser Bridge file input upload and waits for a preview', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-chatgpt-'));
+        tempDirs.push(dir);
+        const filePath = path.join(dir, 'cat.png');
+        fs.writeFileSync(filePath, 'fake-png');
+
+        const page = {
+            setFileInput: vi.fn().mockResolvedValue(undefined),
+            wait: vi.fn().mockResolvedValue(undefined),
+            evaluate: vi.fn().mockResolvedValue(true),
+        };
+
+        const result = await uploadChatGPTImages(page, [filePath]);
+
+        expect(result).toEqual({ ok: true, files: [filePath] });
+        expect(page.setFileInput).toHaveBeenCalledWith([filePath], 'input[type="file"]');
+    });
+
+    it('rejects missing files before touching the page', async () => {
+        const page = {
+            setFileInput: vi.fn(),
+            wait: vi.fn(),
+            evaluate: vi.fn(),
+        };
+
+        const result = await uploadChatGPTImages(page, ['/no/such/cat.png']);
+
+        expect(result.ok).toBe(false);
+        expect(result.reason).toContain('Image not found');
+        expect(page.setFileInput).not.toHaveBeenCalled();
+    });
+
+    it('rejects non-image extensions', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-chatgpt-'));
+        tempDirs.push(dir);
+        const filePath = path.join(dir, 'report.pdf');
+        fs.writeFileSync(filePath, 'fake');
+
+        const page = {
+            setFileInput: vi.fn(),
+            wait: vi.fn(),
+            evaluate: vi.fn(),
+        };
+
+        const result = await uploadChatGPTImages(page, [filePath]);
+
+        expect(result.ok).toBe(false);
+        expect(result.reason).toContain('Unsupported image type');
+        expect(page.setFileInput).not.toHaveBeenCalled();
+    });
+
+    it('passes a React-compatible change event in fallback upload', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'opencli-chatgpt-'));
+        tempDirs.push(dir);
+        const filePath = path.join(dir, 'cat.png');
+        fs.writeFileSync(filePath, 'fake-png');
+
+        const page = {
+            setFileInput: vi.fn().mockRejectedValue(new Error('No element found')),
+            wait: vi.fn().mockResolvedValue(undefined),
+            evaluate: vi.fn((script) => {
+                if (String(script).includes('new DataTransfer()')) {
+                    return Promise.resolve({ ok: true });
+                }
+                return Promise.resolve(true);
+            }),
+        };
+
+        const result = await uploadChatGPTImages(page, [filePath]);
+
+        expect(result).toEqual({ ok: true, files: [filePath] });
+        const fallbackScript = page.evaluate.mock.calls
+            .map(([script]) => String(script))
+            .find(script => script.includes('new DataTransfer()'));
+        expect(fallbackScript).toContain('preventDefault()');
+        expect(fallbackScript).toContain('stopPropagation()');
+    });
+
+    it('exposes image MIME inference for fallback upload', () => {
+        expect(__test__.imageMimeFromPath('/tmp/a.png')).toBe('image/png');
+        expect(__test__.imageMimeFromPath('/tmp/a.webp')).toBe('image/webp');
+        expect(__test__.imageMimeFromPath('/tmp/a.jpg')).toBe('image/jpeg');
     });
 });

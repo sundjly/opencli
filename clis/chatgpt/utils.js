@@ -12,15 +12,26 @@ export const CHATGPT_URL = 'https://chatgpt.com';
 // Selectors
 const COMPOSER_SELECTORS = [
     '[aria-label="Chat with ChatGPT"]',
+    '[aria-label="与 ChatGPT 聊天"]',
     '[placeholder="Ask anything"]',
+    '[placeholder="有问题，尽管问"]',
     '#prompt-textarea',
     '[data-testid="prompt-textarea"]',
     '[contenteditable="true"][role="textbox"]',
+];
+const SEND_BUTTON_SELECTOR = 'button[data-testid="send-button"]:not([disabled])';
+const SEND_BUTTON_FALLBACK_SELECTORS = [
+    '#composer-submit-button:not([disabled])',
 ];
 const SEND_BUTTON_LABELS = [
     'Send prompt',
     'Send message',
     'Send',
+    '发送提示',
+];
+const CLOSE_SIDEBAR_LABELS = [
+    'Close sidebar',
+    '关闭边栏',
 ];
 
 function isSameChatGPTConversation(currentUrl, expectedUrl) {
@@ -63,7 +74,6 @@ function buildComposerLocatorScript() {
       };
 
       findComposer.toString = () => 'findComposer';
-      return { findComposer, markerAttr };
     `;
 }
 
@@ -92,6 +102,50 @@ export function requirePositiveInt(value, flagLabel, hint) {
     return value;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// page.evaluate envelope helpers.
+//
+// The browser bridge wraps every `page.evaluate(...)` return value in a
+// `{ session, data }` envelope. Adapters that read `.length` or
+// `Array.isArray(payload)` directly on the envelope silently see "no data" —
+// this matches the failure mode fixed for xiaohongshu/rednote (#1561) and
+// weibo (#1568).
+//
+// `unwrapEvaluateResult` is a defensive ternary: it unwraps when the payload
+// looks like an envelope, otherwise passes the value through unchanged so
+// older bridge versions and primitive return values still work.
+// ─────────────────────────────────────────────────────────────────────────────
+export function unwrapEvaluateResult(payload) {
+    if (payload && !Array.isArray(payload) && typeof payload === 'object' && 'session' in payload && 'data' in payload) {
+        return payload.data;
+    }
+    return payload;
+}
+
+export function requireArrayEvaluateResult(payload, label) {
+    if (!Array.isArray(payload)) {
+        if (payload && typeof payload === 'object' && 'error' in payload) {
+            throw new CommandExecutionError(`${label}: ${String(payload.error)}`);
+        }
+        throw new CommandExecutionError(`${label} returned malformed extraction payload`);
+    }
+    return payload;
+}
+
+export function requireObjectEvaluateResult(payload, label) {
+    if (!payload || Array.isArray(payload) || typeof payload !== 'object') {
+        throw new CommandExecutionError(`${label} returned malformed extraction payload`);
+    }
+    return payload;
+}
+
+export function requireBooleanEvaluateResult(payload, label) {
+    if (typeof payload !== 'boolean') {
+        throw new CommandExecutionError(`${label} returned malformed extraction payload`);
+    }
+    return payload;
+}
+
 export function parseChatGPTConversationId(value) {
     const raw = String(value ?? '').trim();
     const match = raw.match(/(?:^|\/c\/)([A-Za-z0-9_-]{8,})(?:[/?#]|$)/);
@@ -104,7 +158,7 @@ export function parseChatGPTConversationId(value) {
 }
 
 export async function currentChatGPTUrl(page) {
-    const url = await page.evaluate('window.location.href').catch(() => '');
+    const url = unwrapEvaluateResult(await page.evaluate('window.location.href').catch(() => ''));
     return typeof url === 'string' ? url : '';
 }
 
@@ -119,20 +173,38 @@ export async function isOnChatGPT(page) {
     }
 }
 
+// Comma-joined CSS selector list passed to page.wait({ selector }) so the
+// wait succeeds as soon as any composer flavour mounts (querySelectorAll
+// matches all of them). Tracks the most stable subset of COMPOSER_SELECTORS;
+// we only need to know "the composer is ready", not which variant rendered.
+const COMPOSER_WAIT_SELECTOR = '#prompt-textarea, [data-testid="prompt-textarea"]';
+const CONVERSATION_LINK_SELECTOR = 'a[href*="/c/"]';
+// Selector used by detail.js to wait for at least one rendered message bubble
+// after navigating to /c/<id>; mirrors the markup queried by getVisibleMessages.
+export const CONVERSATION_MESSAGE_SELECTOR = '[data-message-author-role], article[data-testid*="conversation-turn"]';
+
 export async function ensureOnChatGPT(page) {
     if (await isOnChatGPT(page)) return false;
     await page.goto(CHATGPT_URL, { settleMs: 2000 });
-    await page.wait(2);
+    try {
+        await page.wait({ selector: COMPOSER_WAIT_SELECTOR, timeout: 8 });
+    } catch {
+        // Composer didn't mount; downstream ensureChatGPTLogin / ensureChatGPTComposer surfaces a typed error.
+    }
     return true;
 }
 
 export async function startNewChat(page) {
     await page.goto(`${CHATGPT_URL}/new`, { settleMs: 2000 });
-    await page.wait(2);
+    try {
+        await page.wait({ selector: COMPOSER_WAIT_SELECTOR, timeout: 8 });
+    } catch {
+        // Composer didn't mount; downstream ensureChatGPTComposer surfaces a typed error.
+    }
 }
 
 export async function getPageState(page) {
-    return await page.evaluate(`(() => {
+    return requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
         const isVisible = (el) => {
             if (!(el instanceof HTMLElement)) return false;
             const style = window.getComputedStyle(el);
@@ -158,7 +230,7 @@ export async function getPageState(page) {
             isLoggedIn: hasComposer || !!userMenu || !hasLoginGate,
             hasLoginGate,
         };
-    })()`);
+    })()`)), 'chatgpt page state');
 }
 
 export async function ensureChatGPTLogin(page, message = 'ChatGPT requires a logged-in browser session.') {
@@ -177,6 +249,40 @@ export async function ensureChatGPTComposer(page, message = 'ChatGPT composer is
     return state;
 }
 
+export async function clearChatGPTDraft(page) {
+    await page.evaluate(`
+        (() => {
+            const removeLabels = [/^remove file/i, /^移除文件/];
+            for (let pass = 0; pass < 10; pass += 1) {
+                const button = Array.from(document.querySelectorAll('button')).find((node) => {
+                    const label = node.getAttribute('aria-label') || '';
+                    return removeLabels.some((pattern) => pattern.test(label));
+                });
+                if (!button) break;
+                button.click();
+            }
+
+            const selectors = ${JSON.stringify(COMPOSER_SELECTORS)};
+            for (const selector of selectors) {
+                for (const node of document.querySelectorAll(selector)) {
+                    if (!(node instanceof HTMLElement)) continue;
+                    if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
+                        node.value = '';
+                    } else if (node.isContentEditable) {
+                        node.textContent = '';
+                        node.innerHTML = '<p><br></p>';
+                    } else {
+                        node.textContent = '';
+                    }
+                    node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null }));
+                    node.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+        })()
+    `);
+    await page.wait(0.5);
+}
+
 /**
  * Send a message to the ChatGPT composer and submit it.
  * Returns true if the message was sent successfully.
@@ -185,26 +291,36 @@ export async function sendChatGPTMessage(page, text) {
     // Close sidebar if open (it can cover the chat composer)
     await page.evaluate(`
         (() => {
-            const closeBtn = Array.from(document.querySelectorAll('button')).find(b => b.getAttribute('aria-label') === 'Close sidebar');
+            const labels = ${JSON.stringify(CLOSE_SIDEBAR_LABELS)};
+            const closeBtn = Array.from(document.querySelectorAll('button')).find(b => labels.includes(b.getAttribute('aria-label') || ''));
             if (closeBtn) closeBtn.click();
         })()
     `);
-    await page.wait(0.5);
+    // The previous 0.5 s + 1.5 s pre-composer settles are dropped: the next
+    // page.evaluate roundtrip flushes the close-sidebar React update and
+    // findComposer() retries inside a single CDP call, so no fixed sleep is
+    // needed before reading the composer.
 
-    // Wait for composer to be ready and use Playwright's type()
-    await page.wait(1.5);
-    
-    const typeResult = await page.evaluate(`
+    const typeResult = requireBooleanEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
         (() => {
             ${buildComposerLocatorScript()}
             const composer = findComposer();
             if (!composer) return false;
             composer.focus();
-            composer.textContent = '';
+            if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
+                composer.value = '';
+            } else if (composer.isContentEditable) {
+                composer.textContent = '';
+                composer.innerHTML = '<p><br></p>';
+            } else {
+                composer.textContent = '';
+            }
+            composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward', data: null }));
+            composer.dispatchEvent(new Event('change', { bubbles: true }));
             return true;
         })()
-    `);
-    
+    `)), 'chatgpt composer readiness');
+
     if (!typeResult) return false;
     
     // Use page.type() which is Playwright's native method
@@ -228,27 +344,37 @@ export async function sendChatGPTMessage(page, text) {
         `);
     }
     
-    // Wait for send button to appear (it only shows when there's text)
-    await page.wait(1.5);
+    let sent = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+        await page.wait(0.5);
+        sent = requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
+            (() => {
+                const isUsable = (button) => button
+                    && !button.disabled
+                    && button.getAttribute('aria-disabled') !== 'true';
+                const primary = document.querySelector(${JSON.stringify(SEND_BUTTON_SELECTOR)})
+                    || ${JSON.stringify(SEND_BUTTON_FALLBACK_SELECTORS)}.map(selector => document.querySelector(selector)).find(Boolean);
+                const btns = Array.from(document.querySelectorAll('button'));
+                const labels = ${JSON.stringify(SEND_BUTTON_LABELS)};
+                const sendBtn = isUsable(primary)
+                    ? primary
+                    : btns.find(b => labels.includes(b.getAttribute('aria-label') || '') && isUsable(b));
+                return { sendBtnFound: !!sendBtn };
+            })()
+        `)), 'chatgpt send button readiness');
+        if (sent?.sendBtnFound) break;
+    }
 
-    // Click send button
-    const sent = await page.evaluate(`
-        (() => {
-            const btns = Array.from(document.querySelectorAll('button'));
-            const labels = ${JSON.stringify(SEND_BUTTON_LABELS)};
-            const sendBtn = btns.find(b => labels.includes(b.getAttribute('aria-label') || '') && !b.disabled);
-            return { sendBtnFound: !!sendBtn };
-        })()
-    `);
-    
-    if (!sent || !sent.sendBtnFound) {
+    if (!sent?.sendBtnFound) {
         return false;
     }
     
     await page.evaluate(`
         (() => {
+            const primary = document.querySelector(${JSON.stringify(SEND_BUTTON_SELECTOR)})
+                || ${JSON.stringify(SEND_BUTTON_FALLBACK_SELECTORS)}.map(selector => document.querySelector(selector)).find(Boolean);
             const labels = ${JSON.stringify(SEND_BUTTON_LABELS)};
-            const sendBtn = Array.from(document.querySelectorAll('button')).find(b => labels.includes(b.getAttribute('aria-label') || '') && !b.disabled);
+            const sendBtn = primary || Array.from(document.querySelectorAll('button')).find(b => labels.includes(b.getAttribute('aria-label') || '') && !b.disabled);
             if (sendBtn) sendBtn.click();
         })()
     `);
@@ -256,7 +382,7 @@ export async function sendChatGPTMessage(page, text) {
 }
 
 export async function getVisibleMessages(page) {
-    const result = await page.evaluate(`(() => {
+    const result = requireArrayEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
         const isVisible = (el) => {
             if (!(el instanceof HTMLElement)) return false;
             const style = window.getComputedStyle(el);
@@ -302,8 +428,7 @@ export async function getVisibleMessages(page) {
             rows.push({ role, text, html });
         }
         return rows;
-    })()`);
-    if (!Array.isArray(result)) return [];
+    })()`)), 'chatgpt visible messages');
     return result.map((item, index) => ({
         Index: index + 1,
         Role: item?.role === 'Assistant' ? 'Assistant' : 'User',
@@ -361,10 +486,11 @@ export async function waitForChatGPTResponse(page, baselineCount, prompt, timeou
 }
 
 export async function getConversationList(page) {
+    // ensureOnChatGPT already waits for the composer selector after navigation,
+    // so the previous standalone 2 s settle is redundant.
     await ensureOnChatGPT(page);
-    await page.wait(2);
 
-    const openSidebar = await page.evaluate(`(() => {
+    const openSidebar = requireBooleanEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
         const button = Array.from(document.querySelectorAll('button'))
             .find((node) => /open sidebar/i.test(node.getAttribute('aria-label') || ''));
         if (button instanceof HTMLElement) {
@@ -372,13 +498,23 @@ export async function getConversationList(page) {
             return true;
         }
         return false;
-    })()`);
-    if (openSidebar) await page.wait(1);
+    })()`)), 'chatgpt sidebar open state');
+    if (openSidebar) {
+        try {
+            await page.wait({ selector: CONVERSATION_LINK_SELECTOR, timeout: 3 });
+        } catch {
+            // Sidebar slide-in didn't surface conversation links; extractConversationLinks below tolerates empty and falls back to home goto.
+        }
+    }
 
     let items = await extractConversationLinks(page);
     if (!items.length) {
         await page.goto(CHATGPT_URL, { settleMs: 2000 });
-        await page.wait(2);
+        try {
+            await page.wait({ selector: CONVERSATION_LINK_SELECTOR, timeout: 8 });
+        } catch {
+            // No conversation links visible after fallback goto; extractConversationLinks returns empty.
+        }
         items = await extractConversationLinks(page);
     }
 
@@ -386,7 +522,7 @@ export async function getConversationList(page) {
 }
 
 async function extractConversationLinks(page) {
-    const items = await page.evaluate(`(() => {
+    const items = requireArrayEvaluateResult(unwrapEvaluateResult(await page.evaluate(`(() => {
         const isVisible = (el) => {
             if (!(el instanceof HTMLElement)) return false;
             const style = window.getComputedStyle(el);
@@ -411,36 +547,170 @@ async function extractConversationLinks(page) {
             });
         }
         return rows;
-    })()`);
-    return Array.isArray(items)
-        ? items.map((item, index) => ({
+    })()`)), 'chatgpt conversation link extraction');
+    return items.map((item, index) => ({
             Index: index + 1,
             Id: String(item?.Id || ''),
             Title: String(item?.Title || '(untitled)').trim() || '(untitled)',
             Url: String(item?.Url || ''),
-        })).filter((item) => item.Id)
-        : [];
+        })).filter((item) => item.Id);
+}
+
+function imageMimeFromPath(filePath) {
+    const lower = String(filePath || '').toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.heic')) return 'image/heic';
+    if (lower.endsWith('.heif')) return 'image/heif';
+    return 'image/jpeg';
+}
+
+export async function prepareChatGPTImagePaths(imagePaths) {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const absPaths = imagePaths.map(filePath => path.default.resolve(filePath));
+    const allowedExts = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.heif']);
+
+    for (const absPath of absPaths) {
+        if (!fs.default.existsSync(absPath)) {
+            return { ok: false, reason: `Image not found: ${absPath}` };
+        }
+        const stat = fs.default.statSync(absPath);
+        if (!stat.isFile()) {
+            return { ok: false, reason: `Not a file: ${absPath}` };
+        }
+        if (stat.size > 25 * 1024 * 1024) {
+            return { ok: false, reason: `Image too large (${(stat.size / 1024 / 1024).toFixed(1)} MB). Max: 25 MB` };
+        }
+        const ext = path.default.extname(absPath).toLowerCase();
+        if (!allowedExts.has(ext)) {
+            return { ok: false, reason: `Unsupported image type: ${absPath}` };
+        }
+    }
+
+    return { ok: true, paths: absPaths };
+}
+
+async function waitForChatGPTUploadPreview(page, fileNames) {
+    const namesJson = JSON.stringify(fileNames);
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+        await page.wait(1);
+        const ready = requireBooleanEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
+            (() => {
+                const names = ${namesJson};
+                const text = document.body ? (document.body.innerText || '') : '';
+                const matchedNames = names.filter(name => text.includes(name)).length;
+                if (matchedNames >= names.length) return true;
+
+                const composer = document.querySelector('[aria-label="Chat with ChatGPT"], [placeholder="Ask anything"], #prompt-textarea');
+                let root = composer;
+                for (let i = 0; i < 6 && root && root.parentElement; i += 1) root = root.parentElement;
+                const scope = root || document.body;
+                if (!scope) return false;
+
+                const previewNodes = scope.querySelectorAll('img[src], canvas, video, [style*="background-image"], [data-testid*="attachment"], [data-testid*="upload"], [class*="attachment"], [class*="upload"]');
+                return previewNodes.length >= names.length;
+            })()
+        `)), 'chatgpt upload preview detection');
+        if (ready) return true;
+    }
+    return false;
+}
+
+export async function uploadChatGPTImages(page, imagePaths) {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const prepared = await prepareChatGPTImagePaths(imagePaths);
+    if (!prepared.ok) return prepared;
+    const absPaths = prepared.paths;
+
+    const fileNames = absPaths.map(filePath => path.default.basename(filePath));
+
+    let uploaded = false;
+    if (page.setFileInput) {
+        try {
+            await page.setFileInput(absPaths, 'input[type="file"]');
+            uploaded = true;
+        } catch (err) {
+            const msg = String(err?.message || err);
+            if (!msg.includes('Unknown action') && !msg.includes('not supported') && !msg.includes('Not allowed') && !msg.includes('No element found')) {
+                throw err;
+            }
+        }
+    }
+
+    if (!uploaded) {
+        const files = absPaths.map(absPath => ({
+            name: path.default.basename(absPath),
+            mime: imageMimeFromPath(absPath),
+            base64: fs.default.readFileSync(absPath).toString('base64'),
+        }));
+        const fallbackResult = requireObjectEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
+            (() => {
+                const files = ${JSON.stringify(files)};
+                const input = document.querySelector('input[type="file"]');
+                if (!(input instanceof HTMLInputElement)) {
+                    return { ok: false, reason: 'file input not found' };
+                }
+
+                const dt = new DataTransfer();
+                for (const item of files) {
+                    const binary = atob(item.base64);
+                    const bytes = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+                    dt.items.add(new File([bytes], item.name, { type: item.mime }));
+                }
+                input.files = dt.files;
+
+                const propsKey = Object.keys(input).find(key => key.startsWith('__reactProps$'));
+                if (propsKey && input[propsKey] && typeof input[propsKey].onChange === 'function') {
+                    const nativeEvent = new Event('change', { bubbles: true });
+                    input[propsKey].onChange({
+                        target: input,
+                        currentTarget: input,
+                        nativeEvent,
+                        preventDefault() {},
+                        stopPropagation() {},
+                        isDefaultPrevented() { return false; },
+                        isPropagationStopped() { return false; },
+                        persist() {},
+                    });
+                } else {
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                return { ok: true };
+            })()
+        `)), 'chatgpt image upload fallback');
+        if (fallbackResult && !fallbackResult.ok) return fallbackResult;
+    }
+
+    const ready = await waitForChatGPTUploadPreview(page, fileNames);
+    if (!ready) return { ok: false, reason: 'image upload preview did not appear' };
+
+    return { ok: true, files: absPaths };
 }
 
 /**
  * Check if ChatGPT is still generating a response.
  */
 export async function isGenerating(page) {
-    return await page.evaluate(`
+    return requireBooleanEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
         (() => {
             return Array.from(document.querySelectorAll('button')).some(b => {
                 const label = b.getAttribute('aria-label') || '';
                 return label === 'Stop generating' || label.includes('Thinking');
             });
         })()
-    `);
+    `)), 'chatgpt generation state');
 }
 
 /**
  * Get visible image URLs from the ChatGPT page (excluding profile/avatar images).
  */
 export async function getChatGPTVisibleImageUrls(page) {
-    return await page.evaluate(`
+    return requireArrayEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
         (() => {
             const isVisible = (el) => {
                 if (!(el instanceof HTMLElement)) return false;
@@ -450,32 +720,78 @@ export async function getChatGPTVisibleImageUrls(page) {
                 return rect.width > 32 && rect.height > 32;
             };
 
+            const urls = [];
+            const seen = new Set();
+            const normalizeUrl = (value) => {
+                const raw = String(value || '').trim();
+                if (!raw || raw === 'none') return '';
+                if (/^(?:https?:|blob:|data:)/i.test(raw)) return raw;
+                try {
+                    return new URL(raw, window.location.href).href;
+                } catch {
+                    return raw;
+                }
+            };
+            const addUrl = (value) => {
+                const src = normalizeUrl(value);
+                if (!src || seen.has(src)) return;
+                seen.add(src);
+                urls.push(src);
+            };
+            const isDecorative = (el, src = '') => {
+                const alt = (el.getAttribute('alt') || '').toLowerCase();
+                const cls = String(el.className || '').toLowerCase();
+                const testId = (el.getAttribute('data-testid') || '').toLowerCase();
+                const label = (el.getAttribute('aria-label') || '').toLowerCase();
+                const text = [alt, cls, testId, label, src.toLowerCase()].join(' ');
+                return /avatar|profile|logo|icon/.test(text);
+            };
+
             const imgs = Array.from(document.querySelectorAll('img')).filter(img =>
                 img instanceof HTMLImageElement && isVisible(img)
             );
 
-            const urls = [];
-            const seen = new Set();
-
             for (const img of imgs) {
                 const src = img.currentSrc || img.src || '';
-                const alt = (img.getAttribute('alt') || '').toLowerCase();
-                const cls = (img.className || '').toLowerCase();
                 const width = img.naturalWidth || img.width || 0;
                 const height = img.naturalHeight || img.height || 0;
 
                 if (!src) continue;
-                if (alt.includes('avatar') || alt.includes('profile') || alt.includes('logo') || alt.includes('icon')) continue;
-                if (cls.includes('avatar') || cls.includes('profile') || cls.includes('icon')) continue;
+                if (isDecorative(img, src)) continue;
                 if (width < 128 && height < 128) continue;
-                if (seen.has(src)) continue;
+                addUrl(src);
+            }
 
-                seen.add(src);
-                urls.push(src);
+            // ChatGPT occasionally renders generated images as CSS background
+            // thumbnails instead of plain <img> nodes. Treat visible, large
+            // background images as generated-image candidates too.
+            for (const el of Array.from(document.querySelectorAll('[style*="background-image"], [style*="background"]'))) {
+                if (!(el instanceof HTMLElement) || !isVisible(el) || isDecorative(el)) continue;
+                const rect = el.getBoundingClientRect();
+                if (rect.width < 128 && rect.height < 128) continue;
+                const backgroundImage = window.getComputedStyle(el).backgroundImage || '';
+                for (const match of backgroundImage.matchAll(/url\\((['"]?)(.*?)\\1\\)/g)) {
+                    const src = match[2];
+                    if (!src || isDecorative(el, src)) continue;
+                    addUrl(src);
+                }
+            }
+
+            // Some image experiences render to a canvas. Returning the data URL
+            // lets the downstream asset exporter save it without needing a DOM
+            // selector to rediscover the canvas.
+            for (const canvas of Array.from(document.querySelectorAll('canvas'))) {
+                if (!(canvas instanceof HTMLCanvasElement) || !isVisible(canvas) || isDecorative(canvas)) continue;
+                const width = canvas.width || canvas.getBoundingClientRect().width || 0;
+                const height = canvas.height || canvas.getBoundingClientRect().height || 0;
+                if (width < 128 && height < 128) continue;
+                try {
+                    addUrl(canvas.toDataURL('image/png'));
+                } catch { }
             }
             return urls;
         })()
-    `);
+    `)), 'chatgpt visible image url extraction');
 }
 
 /**
@@ -493,7 +809,7 @@ export async function waitForChatGPTImages(page, beforeUrls, timeoutSeconds, con
 
         let currentUrl = '';
         if (convUrl && convUrl.includes('/c/')) {
-            currentUrl = await page.evaluate('window.location.href').catch(() => '');
+            currentUrl = unwrapEvaluateResult(await page.evaluate('window.location.href').catch(() => ''));
             if (currentUrl && !isSameChatGPTConversation(currentUrl, convUrl)) {
                 await page.goto(convUrl);
                 await page.wait(3);
@@ -532,9 +848,14 @@ export async function waitForChatGPTImages(page, beforeUrls, timeoutSeconds, con
 
 export const __test__ = {
     COMPOSER_SELECTORS,
+    SEND_BUTTON_SELECTOR,
+    SEND_BUTTON_FALLBACK_SELECTORS,
     SEND_BUTTON_LABELS,
+    CLOSE_SIDEBAR_LABELS,
+    buildComposerLocatorScript,
     isSameChatGPTConversation,
     parseChatGPTConversationId,
+    imageMimeFromPath,
 };
 
 /**
@@ -542,7 +863,7 @@ export const __test__ = {
  */
 export async function getChatGPTImageAssets(page, urls) {
     const urlsJson = JSON.stringify(urls);
-    return await page.evaluate(`
+    return requireArrayEvaluateResult(unwrapEvaluateResult(await page.evaluate(`
         (async (targetUrls) => {
             const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -575,6 +896,26 @@ export async function getChatGPTImageAssets(page, urls) {
                 if (img) {
                     width = img.naturalWidth || img.width || 0;
                     height = img.naturalHeight || img.height || 0;
+                } else {
+                    const backgroundEl = Array.from(document.querySelectorAll('[style*="background-image"], [style*="background"]')).find(el => {
+                        if (!(el instanceof HTMLElement)) return false;
+                        const backgroundImage = window.getComputedStyle(el).backgroundImage || '';
+                        return Array.from(backgroundImage.matchAll(/url\\((['"]?)(.*?)\\1\\)/g)).some(match => {
+                            const raw = String(match[2] || '').trim();
+                            if (!raw) return false;
+                            if (raw === targetUrl) return true;
+                            try {
+                                return new URL(raw, window.location.href).href === targetUrl;
+                            } catch {
+                                return false;
+                            }
+                        });
+                    });
+                    if (backgroundEl) {
+                        const rect = backgroundEl.getBoundingClientRect();
+                        width = Math.round(rect.width || 0);
+                        height = Math.round(rect.height || 0);
+                    }
                 }
 
                 try {
@@ -616,5 +957,5 @@ export async function getChatGPTImageAssets(page, urls) {
 
             return results;
         })(${urlsJson})
-    `, urls);
+    `)), 'chatgpt image asset export');
 }

@@ -3,7 +3,128 @@ import { JSDOM } from 'jsdom';
 import { __test__ } from './shared.js';
 import { ArgumentError } from '@jackwener/opencli/errors';
 
-const { extractMedia, parseTweetUrl, buildTwitterArticleScopeSource } = __test__;
+const { extractMedia, extractCard, extractQuotedTweet, parseTweetUrl, buildTwitterArticleScopeSource, unwrapBrowserResult, normalizeTwitterGraphqlPayload, normalizeTwitterScreenName, sanitizeTwitterOperationMetadata, looksLikePrivateTwitterTimeline } = __test__;
+
+function makeCardTweet({ name, bindings, expandedUrl, urls }) {
+    const tweet = {
+        card: { legacy: { name, binding_values: bindings } },
+    };
+    if (urls !== undefined) {
+        tweet.legacy = { entities: { urls } };
+        return tweet;
+    }
+    if (expandedUrl !== undefined) {
+        tweet.legacy = { entities: { urls: [{ expanded_url: expandedUrl }] } };
+    }
+    return tweet;
+}
+function strBinding(key, string_value) {
+    return { key, value: { type: 'STRING', string_value } };
+}
+function imgBinding(key, url) {
+    return { key, value: { type: 'IMAGE', image_value: { url } } };
+}
+
+describe('twitter browser result helpers', () => {
+    it('unwraps Browser Bridge exec envelopes', () => {
+        expect(unwrapBrowserResult({ session: 'site:twitter', data: '123' })).toBe('123');
+        expect(unwrapBrowserResult({ data: { user: true } })).toEqual({ data: { user: true } });
+    });
+
+    it('sanitizes operation metadata after unwrapping Browser Bridge envelopes', () => {
+        const result = sanitizeTwitterOperationMetadata({
+            session: 'site:twitter',
+            data: {
+                queryId: 'abc_123',
+                features: { feature: true },
+                fieldToggles: { field: true },
+            },
+        }, { queryId: 'fallback', features: {}, fieldToggles: {} });
+        expect(result).toEqual({
+            queryId: 'abc_123',
+            features: { feature: true },
+            fieldToggles: { field: true },
+        });
+    });
+
+    it('falls back to baked features / fieldToggles when the bundle parser returns empty maps', () => {
+        // Regression guard: resolveTwitterOperationMetadata's bundle parser can
+        // find a queryId but miss `featureSwitches:[...]` (e.g. minification
+        // change, or the 2500-char snippet window truncating before the array).
+        // In that case keysToFlags(undefined) returns {}; if sanitize kept the
+        // empty map, Twitter would receive a request with no features and reply
+        // 400, surfacing a misleading "queryId expired" error.
+        const result = sanitizeTwitterOperationMetadata({
+            queryId: 'newQueryId',
+            features: {},
+            fieldToggles: {},
+        }, {
+            queryId: 'fallback',
+            features: { fallback_feature: true },
+            fieldToggles: { fallback_field: true },
+        });
+        expect(result).toEqual({
+            queryId: 'newQueryId',
+            features: { fallback_feature: true },
+            fieldToggles: { fallback_field: true },
+        });
+    });
+
+    it('falls back when resolved features are non-object falsy values', () => {
+        const result = sanitizeTwitterOperationMetadata({
+            queryId: 'newQueryId',
+            features: null,
+            fieldToggles: undefined,
+        }, {
+            queryId: 'fallback',
+            features: { fallback_feature: true },
+            fieldToggles: { fallback_field: true },
+        });
+        expect(result.features).toEqual({ fallback_feature: true });
+        expect(result.fieldToggles).toEqual({ fallback_field: true });
+    });
+
+    it('normalizes GraphQL payloads when the bridge strips the top-level data key', () => {
+        expect(normalizeTwitterGraphqlPayload({ user: { result: {} } })).toEqual({
+            data: { user: { result: {} } },
+        });
+        expect(normalizeTwitterGraphqlPayload({ search_by_raw_query: { search_timeline: {} } })).toEqual({
+            data: { search_by_raw_query: { search_timeline: {} } },
+        });
+        expect(normalizeTwitterGraphqlPayload({ data: { user: {} } })).toEqual({ data: { user: {} } });
+    });
+});
+
+describe('twitter normalizeTwitterScreenName', () => {
+    it('accepts exact handles and exact Twitter/X profile URLs', () => {
+        expect(normalizeTwitterScreenName('@viewer')).toBe('viewer');
+        expect(normalizeTwitterScreenName('/viewer')).toBe('viewer');
+        expect(normalizeTwitterScreenName('https://x.com/viewer')).toBe('viewer');
+        expect(normalizeTwitterScreenName('https://twitter.com/viewer?lang=en')).toBe('viewer');
+        expect(normalizeTwitterScreenName('https://mobile.twitter.com/viewer')).toBe('viewer');
+    });
+
+    it('rejects route collisions, malformed handles, and non-exact profile URLs', () => {
+        const invalid = [
+            '/home',
+            '/viewer/extra',
+            'viewer/extra',
+            'viewer?tab=posts',
+            'https://x.com/home',
+            'https://x.com/viewer/status/1',
+            'http://x.com/viewer',
+            'https://evil.com/viewer',
+            'https://x.com.evil.com/viewer',
+            'https://x.com:444/viewer',
+            'https://user:pass@x.com/viewer',
+            'bad-handle',
+            'abcdefghijklmnop',
+        ];
+        for (const value of invalid) {
+            expect(normalizeTwitterScreenName(value)).toBe('');
+        }
+    });
+});
 
 describe('twitter parseTweetUrl', () => {
     it('accepts exact Twitter/X tweet URLs and preserves query parameters', () => {
@@ -225,5 +346,449 @@ describe('twitter extractMedia', () => {
             has_media: true,
             media_urls: ['https://pbs.twimg.com/media/c.jpg'],
         });
+    });
+});
+
+describe('twitter extractCard', () => {
+    it('returns null when tweet has no card', () => {
+        expect(extractCard({})).toBeNull();
+        expect(extractCard(undefined)).toBeNull();
+        expect(extractCard({ legacy: { full_text: 'hi' } })).toBeNull();
+    });
+
+    it('extracts full summary_large_image card with all bindings present', () => {
+        const tweet = makeCardTweet({
+            name: 'summary_large_image',
+            bindings: [
+                strBinding('title', 'jackwener/OpenCLI'),
+                strBinding('description', 'Make Any Website & Tool Your CLI'),
+                strBinding('domain', 'github.com'),
+                strBinding('card_url', 'https://t.co/abc'),
+                imgBinding('thumbnail_image_large', 'https://pbs.twimg.com/card_img/thumb_large.jpg'),
+                imgBinding('photo_image_full_size_large', 'https://pbs.twimg.com/card_img/photo_large.jpg'),
+                imgBinding('summary_photo_image_large', 'https://pbs.twimg.com/card_img/summary_large.jpg'),
+            ],
+            urls: [{ url: 'https://t.co/abc', expanded_url: 'https://github.com/jackwener/OpenCLI' }],
+        });
+        expect(extractCard(tweet)).toEqual({
+            name: 'summary_large_image',
+            title: 'jackwener/OpenCLI',
+            description: 'Make Any Website & Tool Your CLI',
+            image_url: 'https://pbs.twimg.com/card_img/thumb_large.jpg',
+            url: 'https://github.com/jackwener/OpenCLI',
+            domain: 'github.com',
+        });
+    });
+
+    it('picks summary_photo_image_large when higher-priority image keys are missing', () => {
+        const tweet = makeCardTweet({
+            name: 'summary',
+            bindings: [
+                strBinding('title', 'Some article'),
+                strBinding('description', 'Body text'),
+                strBinding('domain', 'example.com'),
+                imgBinding('summary_photo_image_large', 'https://pbs.twimg.com/card_img/fallback.jpg'),
+            ],
+            expandedUrl: 'https://example.com/article',
+        });
+        const card = extractCard(tweet);
+        expect(card.image_url).toBe('https://pbs.twimg.com/card_img/fallback.jpg');
+        expect(card.name).toBe('summary');
+    });
+
+    it('derives domain from expanded_url when domain binding is missing', () => {
+        const tweet = makeCardTweet({
+            name: 'promo_image_convo',
+            bindings: [
+                strBinding('title', 'YouTube video'),
+                strBinding('card_url', 'https://t.co/youtube'),
+                imgBinding('photo_image_full_size_large', 'https://pbs.twimg.com/card_img/yt.jpg'),
+            ],
+            urls: [{ url: 'https://t.co/youtube', expanded_url: 'https://www.youtube.com/watch?v=abc' }],
+        });
+        const card = extractCard(tweet);
+        expect(card.url).toBe('https://www.youtube.com/watch?v=abc');
+        expect(card.domain).toBe('www.youtube.com');
+        expect(card.image_url).toBe('https://pbs.twimg.com/card_img/yt.jpg');
+    });
+
+    it('falls back to card_url binding when there is no expanded_url', () => {
+        const tweet = makeCardTweet({
+            name: 'summary_large_image',
+            bindings: [
+                strBinding('title', 'arXiv paper'),
+                strBinding('card_url', 'https://arxiv.org/abs/2305.12345'),
+            ],
+            expandedUrl: undefined,
+        });
+        const card = extractCard(tweet);
+        expect(card.url).toBe('https://arxiv.org/abs/2305.12345');
+        expect(card.domain).toBe('arxiv.org');
+    });
+
+    it('matches card_url to the correct URL entity instead of assuming the first tweet URL', () => {
+        const tweet = makeCardTweet({
+            name: 'summary_large_image',
+            bindings: [
+                strBinding('title', 'OpenCLI release'),
+                strBinding('card_url', 'https://t.co/card123'),
+            ],
+            urls: [
+                { url: 'https://t.co/unrelated', expanded_url: 'https://example.com/unrelated' },
+                { url: 'https://t.co/card123', expanded_url: 'https://github.com/jackwener/OpenCLI/releases' },
+            ],
+        });
+        const card = extractCard(tweet);
+        expect(card.url).toBe('https://github.com/jackwener/OpenCLI/releases');
+        expect(card.domain).toBe('github.com');
+    });
+
+    it('falls back to card_url itself when no matching URL entity is present', () => {
+        const tweet = makeCardTweet({
+            name: 'summary_large_image',
+            bindings: [
+                strBinding('title', 'Unmatched card'),
+                strBinding('card_url', 'https://t.co/card123'),
+            ],
+            urls: [
+                { url: 'https://t.co/unrelated', expanded_url: 'https://example.com/unrelated' },
+            ],
+        });
+        const card = extractCard(tweet);
+        expect(card.url).toBe('https://t.co/card123');
+        expect(card.domain).toBe('t.co');
+    });
+
+    it('omits missing fields rather than emitting undefined values', () => {
+        const tweet = makeCardTweet({
+            name: 'summary',
+            bindings: [
+                strBinding('title', 'Just a title'),
+                strBinding('description', 'Just a description'),
+                strBinding('card_url', 'https://t.co/example'),
+            ],
+            urls: [{ url: 'https://t.co/example', expanded_url: 'https://example.com/x' }],
+        });
+        const card = extractCard(tweet);
+        expect('image_url' in card).toBe(false);
+        expect(card).toEqual({
+            name: 'summary',
+            title: 'Just a title',
+            description: 'Just a description',
+            url: 'https://example.com/x',
+            domain: 'example.com',
+        });
+    });
+
+    it('returns null for a structurally empty card (no url, no title, no description)', () => {
+        const tweet = makeCardTweet({
+            name: 'summary',
+            bindings: [
+                imgBinding('thumbnail_image_large', 'https://pbs.twimg.com/card_img/x.jpg'),
+            ],
+            expandedUrl: undefined,
+        });
+        expect(extractCard(tweet)).toBeNull();
+    });
+
+    it('does not throw on a malformed expanded_url; domain is simply omitted', () => {
+        const tweet = makeCardTweet({
+            name: 'summary',
+            bindings: [
+                strBinding('title', 'broken url card'),
+                strBinding('card_url', 'https://t.co/broken'),
+            ],
+            urls: [{ url: 'https://t.co/broken', expanded_url: 'not a url' }],
+        });
+        const card = extractCard(tweet);
+        expect(card.url).toBe('not a url');
+        expect('domain' in card).toBe(false);
+    });
+
+    it('tolerates missing binding_values array', () => {
+        const tweet = {
+            card: { legacy: { name: 'summary' } },
+            legacy: { entities: { urls: [{ expanded_url: 'https://example.com/' }] } },
+        };
+        const card = extractCard(tweet);
+        expect(card).toBeNull();
+    });
+});
+
+describe('twitter extractQuotedTweet', () => {
+    it('returns null on plain tweets (is_quote_status absent or false)', () => {
+        expect(extractQuotedTweet({})).toBeNull();
+        expect(extractQuotedTweet({ legacy: {} })).toBeNull();
+        expect(extractQuotedTweet({ legacy: { is_quote_status: false } })).toBeNull();
+        // is_quote_status true but no nested result (deleted / restricted): still null
+        expect(extractQuotedTweet({
+            legacy: { is_quote_status: true, quoted_status_id_str: '99' },
+        })).toBeNull();
+    });
+
+    it('returns null on tombstoned / unavailable quoted tweets', () => {
+        // GraphQL emits TweetTombstone / TweetUnavailable when the quoted tweet
+        // is deleted, suspended, or privacy-restricted. The wrapper has no
+        // `legacy` / `rest_id` — null-coalesces in the helper cover this.
+        const tweet = {
+            legacy: { is_quote_status: true, quoted_status_id_str: '99' },
+            quoted_status_result: { result: { __typename: 'TweetTombstone' } },
+        };
+        expect(extractQuotedTweet(tweet)).toBeNull();
+    });
+
+    it('returns null when the quoted tweet lacks author identity', () => {
+        const tweet = {
+            legacy: { is_quote_status: true, quoted_status_id_str: '99' },
+            quoted_status_result: {
+                result: {
+                    rest_id: '99',
+                    legacy: { full_text: 'real quoted text' },
+                    core: { user_results: { result: { legacy: {} } } },
+                },
+            },
+        };
+        expect(extractQuotedTweet(tweet)).toBeNull();
+    });
+
+    it('returns null when the quoted tweet author identity has the wrong shape', () => {
+        const tweet = {
+            legacy: { is_quote_status: true, quoted_status_id_str: '99' },
+            quoted_status_result: {
+                result: {
+                    rest_id: '99',
+                    legacy: { full_text: 'real quoted text' },
+                    core: {
+                        user_results: {
+                            result: {
+                                legacy: { screen_name: { value: 'alice' }, name: { value: 'Alice' } },
+                            },
+                        },
+                    },
+                },
+            },
+        };
+        expect(extractQuotedTweet(tweet)).toBeNull();
+    });
+
+    it('returns null when the quoted tweet author handle is not a valid screen name', () => {
+        const tweet = {
+            legacy: { is_quote_status: true, quoted_status_id_str: '99' },
+            quoted_status_result: {
+                result: {
+                    rest_id: '99',
+                    legacy: { full_text: 'real quoted text' },
+                    core: { user_results: { result: { legacy: { screen_name: 'not/a/user' } } } },
+                },
+            },
+        };
+        expect(extractQuotedTweet(tweet)).toBeNull();
+    });
+
+    it('returns null when the quoted tweet lacks renderable content', () => {
+        const tweet = {
+            legacy: { is_quote_status: true, quoted_status_id_str: '99' },
+            quoted_status_result: {
+                result: {
+                    rest_id: '99',
+                    legacy: {},
+                    core: { user_results: { result: { legacy: { screen_name: 'alice' } } } },
+                },
+            },
+        };
+        expect(extractQuotedTweet(tweet)).toBeNull();
+    });
+
+    it('extracts a minimal quoted tweet shape with author, text, url', () => {
+        const tweet = {
+            legacy: { is_quote_status: true, quoted_status_id_str: '2040254679301718161' },
+            quoted_status_result: {
+                result: {
+                    rest_id: '2040254679301718161',
+                    legacy: {
+                        full_text: '罗某官二代背景考',
+                        created_at: 'Wed May 13 22:00:00 +0000 2026',
+                    },
+                    core: {
+                        user_results: {
+                            result: { legacy: { screen_name: 'alice', name: 'Alice' } },
+                        },
+                    },
+                },
+            },
+        };
+        expect(extractQuotedTweet(tweet)).toEqual({
+            id: '2040254679301718161',
+            author: 'alice',
+            name: 'Alice',
+            text: '罗某官二代背景考',
+            created_at: 'Wed May 13 22:00:00 +0000 2026',
+            url: 'https://x.com/alice/status/2040254679301718161',
+            has_media: false,
+            media_urls: [],
+        });
+    });
+
+    it('extracts media from the quoted tweet via extractMedia', () => {
+        const tweet = {
+            legacy: { is_quote_status: true },
+            quoted_status_result: {
+                result: {
+                    rest_id: '99',
+                    legacy: {
+                        full_text: '日本电车实录',
+                        extended_entities: {
+                            media: [
+                                { type: 'photo', media_url_https: 'https://pbs.twimg.com/media/a.jpg' },
+                                { type: 'photo', media_url_https: 'https://pbs.twimg.com/media/b.jpg' },
+                            ],
+                        },
+                    },
+                    core: { user_results: { result: { legacy: { screen_name: 'rwayne' } } } },
+                },
+            },
+        };
+        const q = extractQuotedTweet(tweet);
+        expect(q.has_media).toBe(true);
+        expect(q.media_urls).toEqual([
+            'https://pbs.twimg.com/media/a.jpg',
+            'https://pbs.twimg.com/media/b.jpg',
+        ]);
+    });
+
+    it('extracts the quoted tweet card when present', () => {
+        const tweet = {
+            legacy: { is_quote_status: true },
+            quoted_status_result: {
+                result: {
+                    rest_id: '100',
+                    legacy: {
+                        full_text: '',
+                        entities: {
+                            urls: [{ url: 'https://t.co/abc', expanded_url: 'https://github.com/x/y' }],
+                        },
+                    },
+                    core: { user_results: { result: { legacy: { screen_name: 'bob' } } } },
+                    card: {
+                        legacy: {
+                            name: 'summary_large_image',
+                            binding_values: [
+                                { key: 'title', value: { type: 'STRING', string_value: 'x/y' } },
+                                { key: 'card_url', value: { type: 'STRING', string_value: 'https://t.co/abc' } },
+                            ],
+                        },
+                    },
+                },
+            },
+        };
+        const q = extractQuotedTweet(tweet);
+        expect(q.card).toEqual({
+            name: 'summary_large_image',
+            title: 'x/y',
+            url: 'https://github.com/x/y',
+            domain: 'github.com',
+        });
+    });
+
+    it('prefers long-form note_tweet text over truncated legacy full_text', () => {
+        const tweet = {
+            legacy: { is_quote_status: true },
+            quoted_status_result: {
+                result: {
+                    rest_id: '101',
+                    legacy: { full_text: 'short…' },
+                    note_tweet: { note_tweet_results: { result: { text: 'full long body of the quoted tweet' } } },
+                    core: { user_results: { result: { legacy: { screen_name: 'carol' } } } },
+                },
+            },
+        };
+        expect(extractQuotedTweet(tweet)?.text).toBe('full long body of the quoted tweet');
+    });
+
+    it('unwraps TweetWithVisibilityResults — quoted_status_result.result.tweet shim', () => {
+        // Mirrors the top-level `tw.tweet || tw` shim that callers do for sensitive content.
+        const tweet = {
+            legacy: { is_quote_status: true },
+            quoted_status_result: {
+                result: {
+                    __typename: 'TweetWithVisibilityResults',
+                    tweet: {
+                        rest_id: '102',
+                        legacy: { full_text: 'sensitive content quoted' },
+                        core: { user_results: { result: { legacy: { screen_name: 'dave' } } } },
+                    },
+                },
+            },
+        };
+        const q = extractQuotedTweet(tweet);
+        expect(q?.id).toBe('102');
+        expect(q?.author).toBe('dave');
+        expect(q?.text).toBe('sensitive content quoted');
+    });
+
+    it('does NOT recurse — a quote of a quote drops the inner-inner quote', () => {
+        // Avoid payload explosion on threads where every reply re-quotes the root.
+        // Level-1 quote is preserved; level-2 (a quote inside the quoted tweet)
+        // is intentionally not surfaced.
+        const tweet = {
+            legacy: { is_quote_status: true },
+            quoted_status_result: {
+                result: {
+                    rest_id: '200',
+                    legacy: {
+                        full_text: 'level-1 quote text',
+                        is_quote_status: true,
+                    },
+                    core: { user_results: { result: { legacy: { screen_name: 'l1' } } } },
+                    quoted_status_result: {
+                        result: {
+                            rest_id: '300',
+                            legacy: { full_text: 'level-2 should be dropped' },
+                            core: { user_results: { result: { legacy: { screen_name: 'l2' } } } },
+                        },
+                    },
+                },
+            },
+        };
+        const q = extractQuotedTweet(tweet);
+        expect(q?.id).toBe('200');
+        expect(q?.text).toBe('level-1 quote text');
+        expect(q).not.toHaveProperty('quoted_tweet');
+    });
+});
+
+describe('looksLikePrivateTwitterTimeline', () => {
+    it('returns true when result.timeline is an empty object', () => {
+        expect(looksLikePrivateTwitterTimeline({
+            data: { user: { result: { __typename: 'User', timeline: {} } } },
+        })).toBe(true);
+    });
+    it('returns false when timeline.timeline.instructions is present', () => {
+        expect(looksLikePrivateTwitterTimeline({
+            data: { user: { result: { timeline: { timeline: { instructions: [] } } } } },
+        })).toBe(false);
+    });
+    it('returns false when timeline_v2.timeline.instructions is present', () => {
+        expect(looksLikePrivateTwitterTimeline({
+            data: { user: { result: { timeline_v2: { timeline: { instructions: [] } } } } },
+        })).toBe(false);
+    });
+    it('returns false when result is missing entirely', () => {
+        expect(looksLikePrivateTwitterTimeline({})).toBe(false);
+        expect(looksLikePrivateTwitterTimeline(null)).toBe(false);
+        expect(looksLikePrivateTwitterTimeline({ data: { user: {} } })).toBe(false);
+    });
+    it('returns false for non-empty malformed timeline objects', () => {
+        expect(looksLikePrivateTwitterTimeline({
+            data: { user: { result: { timeline: { unexpected: true } } } },
+        })).toBe(false);
+        expect(looksLikePrivateTwitterTimeline({
+            data: { user: { result: { timeline: { timeline: {} } } } },
+        })).toBe(false);
+    });
+    it('returns true when timeline_v2.timeline is an empty object', () => {
+        expect(looksLikePrivateTwitterTimeline({
+            data: { user: { result: { timeline_v2: { timeline: {} } } } },
+        })).toBe(true);
     });
 });

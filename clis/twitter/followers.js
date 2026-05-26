@@ -1,5 +1,6 @@
-import { ArgumentError, AuthRequiredError, selectorError, EmptyResultError } from '@jackwener/opencli/errors';
+import { ArgumentError, AuthRequiredError, selectorError, EmptyResultError, CommandExecutionError } from '@jackwener/opencli/errors';
 import { cli, Strategy } from '@jackwener/opencli/registry';
+import { normalizeTwitterScreenName, unwrapBrowserResult } from './shared.js';
 
 /**
  * Extract follower rows from Twitter/X follower-list SPA cells.
@@ -72,7 +73,7 @@ async function extractFollowersFromDOM(page) {
 }
 
 function normalizeScreenName(value) {
-    return String(value ?? '').trim().replace(/^\/+/, '').replace(/^@+/, '');
+    return normalizeTwitterScreenName(value);
 }
 
 cli({
@@ -102,18 +103,27 @@ cli({
             throw new ArgumentError('limit must be a positive integer');
         }
 
-        let targetUser = normalizeScreenName(kwargs.user);
+        const rawUser = String(kwargs.user ?? '').trim();
+        let targetUser = normalizeScreenName(rawUser);
+        if (rawUser && !targetUser) {
+            throw new ArgumentError('twitter followers user must be a valid Twitter/X handle', 'Example: opencli twitter followers @elonmusk --limit 100');
+        }
         if (!targetUser) {
             await page.goto('https://x.com/home');
             await page.wait({ selector: '[data-testid="primaryColumn"]' });
-            const href = await page.evaluate(`() => {
+            // Bridge wraps primitive page.evaluate returns as { session, data:<value> };
+            // unwrap so the href string is usable downstream.
+            const href = unwrapBrowserResult(await page.evaluate(`() => {
                 const link = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
                 return link ? link.getAttribute('href') : null;
-            }`);
-            if (!href) {
+            }`));
+            if (!href || typeof href !== 'string') {
                 throw new AuthRequiredError('x.com', 'Could not find logged-in user profile link. Are you logged in?');
             }
             targetUser = normalizeScreenName(href);
+            if (!targetUser) {
+                throw new AuthRequiredError('x.com', 'Could not find logged-in user profile link. Are you logged in?');
+            }
         }
         if (!targetUser) {
             throw new ArgumentError('twitter followers user cannot be empty', 'Example: opencli twitter followers @elonmusk --limit 100');
@@ -151,7 +161,11 @@ cli({
         const seen = new Set();
         let sameCount = 0;
         while (allFollowers.length < limit && sameCount < 3) {
-            const followers = await extractFollowersFromDOM(page);
+            const rawFollowers = await extractFollowersFromDOM(page);
+            if (!Array.isArray(rawFollowers)) {
+                throw new CommandExecutionError('Twitter followers extraction returned malformed rows');
+            }
+            const followers = rawFollowers;
             const newFollowers = followers.filter(f => !seen.has(f.screen_name));
             for (const f of newFollowers) {
                 seen.add(f.screen_name);
@@ -172,3 +186,8 @@ cli({
         return allFollowers.slice(0, limit);
     }
 });
+
+export const __test__ = {
+    extractFollowersFromDOM,
+    normalizeScreenName,
+};
