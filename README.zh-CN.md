@@ -15,7 +15,7 @@ OpenCLI 可以用同一套 CLI 做三类事情：
 - **让 AI Agent 操作任意网站**：在你的 AI Agent（Claude Code、Cursor 等）中安装 `opencli-browser` skill，Agent 就能用你的已登录浏览器导航、点击、输入/填充、提取任意网页内容。
 - **把新网站写成 CLI**：用 `opencli browser` 原语 + `opencli-adapter-author` skill，从站点侦察、API 发现、字段解码到 `opencli browser verify` 一条龙。
 
-除了网站能力，OpenCLI 还是一个 **CLI 枢纽**：你可以把 `gh`、`docker`、`longbridge`、`tg`、`discord`、`wx`、`ntn`（Notion）等本地工具统一注册到 `opencli` 下，也可以通过桌面端适配器控制 Cursor、Codex、Antigravity、ChatGPT 等 Electron 应用。
+除了网站能力，OpenCLI 还是一个 **CLI 枢纽**：你可以把 `gh`、`docker`、`longbridge`、`tg`、`discord`、`wx`、`ntn`（Notion）等本地工具统一注册到 `opencli` 下，也可以通过桌面端适配器控制 Cursor、Trae CN、Codex、Antigravity、ChatGPT、Trae SOLO 等 Electron 应用。
 
 ## 快速开始
 
@@ -91,6 +91,8 @@ npx skills add jackwener/opencli
 npx skills add jackwener/opencli --skill opencli-adapter-author
 npx skills add jackwener/opencli --skill opencli-autofix
 npx skills add jackwener/opencli --skill opencli-browser
+npx skills add jackwener/opencli --skill opencli-browser-sitemap
+npx skills add jackwener/opencli --skill opencli-sitemap-author
 npx skills add jackwener/opencli --skill opencli-usage
 ```
 
@@ -101,6 +103,8 @@ npx skills add jackwener/opencli --skill opencli-usage
 | **opencli-adapter-author** | 为新站点写可复用适配器，或给已有站点添加命令 | "帮我做一个抖音热门的适配器" / "帮我做一个抓取这个页面热帖的命令" |
 | **opencli-autofix** | 内置命令失败时修复已有适配器 | "`opencli zhihu hot` 返回空了，修一下" |
 | **opencli-browser** | 实时驱动 Chrome 页面——导航、填表单、点击、抓取 | "帮我看看小红书的通知" / "帮我填一下这个表单" / "用浏览器命令抓取这个页面" |
+| **opencli-browser-sitemap** | 使用站点 sitemap 上下文来操作浏览器任务 | "用 sitemap 帮我少走弯路地操作这个网站" |
+| **opencli-sitemap-author** | 创建或更新面向浏览器 Agent 的站点 sitemap | "把刚发现的稳定流程记录到这个站点的 sitemap" |
 | **opencli-usage** | 所有命令和站点的快速参考 | "OpenCLI 有哪些 Twitter 相关的命令？" |
 
 ### 工作原理
@@ -117,6 +121,8 @@ Agent 在内部自动处理所有 `opencli browser` 命令——你只需用自�
 
 **Skill 参考文档：**
 - [`skills/opencli-browser/SKILL.md`](./skills/opencli-browser/SKILL.md) — 实时驱动 Chrome（导航、填表单、点击、抓取）
+- [`skills/opencli-browser-sitemap/SKILL.md`](./skills/opencli-browser-sitemap/SKILL.md) — 操作浏览器任务时消费 sitemap 上下文
+- [`skills/opencli-sitemap-author/SKILL.md`](./skills/opencli-sitemap-author/SKILL.md) — 创建或更新站点 sitemap 知识
 - [`skills/opencli-adapter-author/SKILL.md`](./skills/opencli-adapter-author/SKILL.md) — 给新站点写适配器，全流程
 - [`skills/opencli-autofix/SKILL.md`](./skills/opencli-autofix/SKILL.md) — 修复已有适配器
 - [`skills/opencli-usage/SKILL.md`](./skills/opencli-usage/SKILL.md) — 命令和站点参考
@@ -162,9 +168,9 @@ Agent 在内部自动处理所有 `opencli browser` 命令——你只需用自�
 | **zhihu** | `hot` `search` `question` `download` `follow` `like` `favorite` `comment` `answer` |
 | **hackernews** | `top` `new` `best` `ask` `show` `jobs` `search` `user` |
 | **geogebra** | `eval` `add-point` `add-line` `add-circle` `add-polygon` `triangle` `hexagon` `list` `info` |
-| **linkedin** | `connect` `inbox` `job-detail` `jobs-preferences` `post-analytics` `posts` `profile-projects` `profile-read` `profile-analytics` `safe-send` `search` `people-search` `services-read` `sent-invitations` `thread-snapshot` `timeline` `salesnav-search` `salesnav-inbox` `salesnav-message` `salesnav-thread` |
+| **linkedin** | `connect` `inbox` `job-detail` `jobs-preferences` `post-analytics` `posts` `profile-experience` `profile-projects` `profile-read` `profile-analytics` `safe-send` `search` `people-search` `services-read` `sent-invitations` `thread-snapshot` `timeline` `salesnav-search` `salesnav-inbox` `salesnav-message` `salesnav-thread` |
 | **reddit** | `hot` `frontpage` `popular` `search` `subreddit` `read` `user` `user-posts` `user-comments` `upvote` `save` `comment` `subscribe` `saved` `upvoted` |
-| **twitter** | `trending` `search` `timeline` `tweets` `lists` `list-tweets` `list-add` `list-remove` `bookmarks` `profile` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `likes` `article` `follow` `unfollow` `bookmark` `unbookmark` `download` `accept` `reply-dm` `block` `unblock` `hide-reply` |
+| **twitter** | `trending` `search` `timeline` `tweets` `lists` `list-tweets` `list-create` `list-delete` `list-add` `list-add-batch` `list-remove` `list-remove-batch` `bookmarks` `profile` `thread` `following` `followers` `notifications` `post` `reply` `delete` `like` `likes` `article` `follow` `unfollow` `bookmark` `unbookmark` `download` `accept` `reply-dm` `block` `unblock` `hide-reply` |
 | **claude** | `ask` `send` `new` `status` `read` `history` `detail` |
 | **gemini** | `new` `ask` `image` `deep-research` `deep-research-result` |
 | **notebooklm** | `status` `list` `open` `current` `get` `history` `summary` `note-list` `notes-get` `source-list` `source-get` `source-fulltext` `source-guide` |
@@ -181,7 +187,7 @@ Agent 在内部自动处理所有 `opencli browser` 命令——你只需用自�
 
 注册自定义本地 CLI：`opencli external register <name>`；查看所有：`opencli external list`。
 
-**桌面应用适配器**（Electron，通过 CDP）：Cursor / Codex / Antigravity / ChatGPT App / ChatWise / Discord / Doubao — 详见 [`docs/adapters/desktop/`](./docs/adapters/desktop/)。
+**桌面应用适配器**（Electron，通过 CDP）：Cursor / Trae CN / Codex / Antigravity / ChatGPT App / ChatWise / Qoder / Discord / Doubao / Trae SOLO — 详见 [`docs/adapters/desktop/`](./docs/adapters/desktop/)。
 
 ## 下载支持
 
