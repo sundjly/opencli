@@ -3534,6 +3534,34 @@
   },
   {
     "site": "bilibili",
+    "name": "follow",
+    "description": "关注 B站用户（官方 API，需登录）",
+    "access": "write",
+    "domain": "www.bilibili.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "target",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "目标 UID / 用户名 / space.bilibili.com 链接"
+      }
+    ],
+    "columns": [
+      "mid",
+      "name",
+      "status",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "bilibili/follow.js",
+    "sourceFile": "bilibili/follow.js",
+    "navigateBefore": "https://www.bilibili.com"
+  },
+  {
+    "site": "bilibili",
     "name": "following",
     "description": "获取 Bilibili 用户的关注列表",
     "access": "read",
@@ -3826,6 +3854,34 @@
     "type": "js",
     "modulePath": "bilibili/summary.js",
     "sourceFile": "bilibili/summary.js",
+    "navigateBefore": "https://www.bilibili.com"
+  },
+  {
+    "site": "bilibili",
+    "name": "unfollow",
+    "description": "取消关注 B站用户（官方 API，需登录）",
+    "access": "write",
+    "domain": "www.bilibili.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "target",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "目标 UID / 用户名 / space.bilibili.com 链接"
+      }
+    ],
+    "columns": [
+      "mid",
+      "name",
+      "status",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "bilibili/unfollow.js",
+    "sourceFile": "bilibili/unfollow.js",
     "navigateBefore": "https://www.bilibili.com"
   },
   {
@@ -4275,7 +4331,34 @@
   {
     "site": "bloomberg",
     "name": "businessweek",
-    "description": "Bloomberg Businessweek top stories (RSS)",
+    "description": "Bloomberg Businessweek top stories",
+    "access": "read",
+    "domain": "www.bloomberg.com",
+    "strategy": "public",
+    "browser": true,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 1,
+        "required": false,
+        "help": "Number of stories to return (max 20)"
+      }
+    ],
+    "columns": [
+      "title",
+      "summary",
+      "link",
+      "mediaLinks"
+    ],
+    "type": "js",
+    "modulePath": "bloomberg/businessweek.js",
+    "sourceFile": "bloomberg/businessweek.js"
+  },
+  {
+    "site": "bloomberg",
+    "name": "crypto",
+    "description": "Bloomberg Crypto top stories (RSS)",
     "access": "read",
     "domain": "feeds.bloomberg.com",
     "strategy": "public",
@@ -4296,8 +4379,8 @@
       "mediaLinks"
     ],
     "type": "js",
-    "modulePath": "bloomberg/businessweek.js",
-    "sourceFile": "bloomberg/businessweek.js"
+    "modulePath": "bloomberg/crypto.js",
+    "sourceFile": "bloomberg/crypto.js"
   },
   {
     "site": "bloomberg",
@@ -4342,6 +4425,33 @@
     "type": "js",
     "modulePath": "bloomberg/feeds.js",
     "sourceFile": "bloomberg/feeds.js"
+  },
+  {
+    "site": "bloomberg",
+    "name": "green",
+    "description": "Bloomberg Green (climate & energy) top stories (RSS)",
+    "access": "read",
+    "domain": "feeds.bloomberg.com",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 1,
+        "required": false,
+        "help": "Number of feed items to return (max 20)"
+      }
+    ],
+    "columns": [
+      "title",
+      "summary",
+      "link",
+      "mediaLinks"
+    ],
+    "type": "js",
+    "modulePath": "bloomberg/green.js",
+    "sourceFile": "bloomberg/green.js"
   },
   {
     "site": "bloomberg",
@@ -4506,6 +4616,33 @@
     "type": "js",
     "modulePath": "bloomberg/politics.js",
     "sourceFile": "bloomberg/politics.js"
+  },
+  {
+    "site": "bloomberg",
+    "name": "pursuits",
+    "description": "Bloomberg Pursuits (lifestyle) top stories (RSS)",
+    "access": "read",
+    "domain": "feeds.bloomberg.com",
+    "strategy": "public",
+    "browser": false,
+    "args": [
+      {
+        "name": "limit",
+        "type": "int",
+        "default": 1,
+        "required": false,
+        "help": "Number of feed items to return (max 20)"
+      }
+    ],
+    "columns": [
+      "title",
+      "summary",
+      "link",
+      "mediaLinks"
+    ],
+    "type": "js",
+    "modulePath": "bloomberg/pursuits.js",
+    "sourceFile": "bloomberg/pursuits.js"
   },
   {
     "site": "bloomberg",
@@ -17181,6 +17318,38 @@
   },
   {
     "site": "jike",
+    "name": "login",
+    "description": "Open jike login and wait until the browser session is authenticated",
+    "access": "write",
+    "domain": "web.okjike.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 300,
+        "required": false,
+        "help": "Maximum seconds to wait for the user to finish login"
+      }
+    ],
+    "columns": [
+      "status",
+      "logged_in",
+      "site",
+      "user_id",
+      "screen_name",
+      "username"
+    ],
+    "type": "js",
+    "modulePath": "jike/auth.js",
+    "sourceFile": "jike/auth.js",
+    "navigateBefore": false,
+    "siteSession": "persistent",
+    "defaultWindowMode": "foreground"
+  },
+  {
+    "site": "jike",
     "name": "notifications",
     "description": "即刻通知",
     "access": "read",
@@ -17383,6 +17552,27 @@
     "navigateBefore": "https://m.okjike.com"
   },
   {
+    "site": "jike",
+    "name": "whoami",
+    "description": "Show the current logged-in jike account",
+    "access": "read",
+    "domain": "web.okjike.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [],
+    "columns": [
+      "logged_in",
+      "site",
+      "user_id",
+      "screen_name",
+      "username"
+    ],
+    "type": "js",
+    "modulePath": "jike/auth.js",
+    "sourceFile": "jike/auth.js",
+    "navigateBefore": false
+  },
+  {
     "site": "jimeng",
     "name": "generate",
     "description": "即梦AI 文生图 — 输入 prompt 生成图片",
@@ -17455,6 +17645,37 @@
   },
   {
     "site": "jimeng",
+    "name": "login",
+    "description": "Open jimeng login and wait until the browser session is authenticated",
+    "access": "write",
+    "domain": "jimeng.jianying.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 300,
+        "required": false,
+        "help": "Maximum seconds to wait for the user to finish login"
+      }
+    ],
+    "columns": [
+      "status",
+      "logged_in",
+      "site",
+      "user_id",
+      "screen_name"
+    ],
+    "type": "js",
+    "modulePath": "jimeng/auth.js",
+    "sourceFile": "jimeng/auth.js",
+    "navigateBefore": false,
+    "siteSession": "persistent",
+    "defaultWindowMode": "foreground"
+  },
+  {
+    "site": "jimeng",
     "name": "new",
     "description": "即梦AI 新建会话（workspace）",
     "access": "write",
@@ -17470,6 +17691,26 @@
     "modulePath": "jimeng/new.js",
     "sourceFile": "jimeng/new.js",
     "navigateBefore": "https://jimeng.jianying.com"
+  },
+  {
+    "site": "jimeng",
+    "name": "whoami",
+    "description": "Show the current logged-in jimeng account",
+    "access": "read",
+    "domain": "jimeng.jianying.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [],
+    "columns": [
+      "logged_in",
+      "site",
+      "user_id",
+      "screen_name"
+    ],
+    "type": "js",
+    "modulePath": "jimeng/auth.js",
+    "sourceFile": "jimeng/auth.js",
+    "navigateBefore": false
   },
   {
     "site": "jimeng",
@@ -21144,6 +21385,38 @@
   },
   {
     "site": "maimai",
+    "name": "login",
+    "description": "Open maimai login and wait until the browser session is authenticated",
+    "access": "write",
+    "domain": "maimai.cn",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 300,
+        "required": false,
+        "help": "Maximum seconds to wait for the user to finish login"
+      }
+    ],
+    "columns": [
+      "status",
+      "logged_in",
+      "site",
+      "user_id",
+      "name",
+      "company"
+    ],
+    "type": "js",
+    "modulePath": "maimai/auth.js",
+    "sourceFile": "maimai/auth.js",
+    "navigateBefore": false,
+    "siteSession": "persistent",
+    "defaultWindowMode": "foreground"
+  },
+  {
+    "site": "maimai",
     "name": "search-talents",
     "description": "Search for candidates on Maimai with multi-dimensional filters",
     "access": "read",
@@ -21265,6 +21538,27 @@
     "modulePath": "maimai/search-talents.js",
     "sourceFile": "maimai/search-talents.js",
     "navigateBefore": "https://maimai.cn"
+  },
+  {
+    "site": "maimai",
+    "name": "whoami",
+    "description": "Show the current logged-in maimai account",
+    "access": "read",
+    "domain": "maimai.cn",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [],
+    "columns": [
+      "logged_in",
+      "site",
+      "user_id",
+      "name",
+      "company"
+    ],
+    "type": "js",
+    "modulePath": "maimai/auth.js",
+    "sourceFile": "maimai/auth.js",
+    "navigateBefore": false
   },
   {
     "site": "manus",
@@ -22729,6 +23023,37 @@
   },
   {
     "site": "nowcoder",
+    "name": "login",
+    "description": "Open nowcoder login and wait until the browser session is authenticated",
+    "access": "write",
+    "domain": "nowcoder.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 300,
+        "required": false,
+        "help": "Maximum seconds to wait for the user to finish login"
+      }
+    ],
+    "columns": [
+      "status",
+      "logged_in",
+      "site",
+      "user_id",
+      "nickname"
+    ],
+    "type": "js",
+    "modulePath": "nowcoder/auth.js",
+    "sourceFile": "nowcoder/auth.js",
+    "navigateBefore": false,
+    "siteSession": "persistent",
+    "defaultWindowMode": "foreground"
+  },
+  {
+    "site": "nowcoder",
     "name": "notifications",
     "description": "Unread message summary",
     "access": "read",
@@ -23064,6 +23389,26 @@
     "type": "js",
     "modulePath": "nowcoder/trending.js",
     "sourceFile": "nowcoder/trending.js"
+  },
+  {
+    "site": "nowcoder",
+    "name": "whoami",
+    "description": "Show the current logged-in nowcoder account",
+    "access": "read",
+    "domain": "nowcoder.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [],
+    "columns": [
+      "logged_in",
+      "site",
+      "user_id",
+      "nickname"
+    ],
+    "type": "js",
+    "modulePath": "nowcoder/auth.js",
+    "sourceFile": "nowcoder/auth.js",
+    "navigateBefore": false
   },
   {
     "site": "npm",
@@ -26915,7 +27260,11 @@
       "type",
       "author",
       "score",
-      "text"
+      "text",
+      "post_hint",
+      "url_overridden_by_dest",
+      "preview_image_url",
+      "gallery_urls"
     ],
     "type": "js",
     "modulePath": "reddit/read.js",
@@ -36885,6 +37234,8 @@
     "columns": [
       "rank",
       "author",
+      "userId",
+      "profileUrl",
       "text",
       "likes",
       "time",
@@ -37296,6 +37647,33 @@
   },
   {
     "site": "xiaohongshu",
+    "name": "follow",
+    "description": "关注小红书用户 (profile UI automation)",
+    "access": "write",
+    "domain": "www.xiaohongshu.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "user-id",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "User ID (e.g. 5d8f88dc0000000001005d3a) or profile URL"
+      }
+    ],
+    "columns": [
+      "status",
+      "user_id",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "xiaohongshu/follow.js",
+    "sourceFile": "xiaohongshu/follow.js",
+    "navigateBefore": false
+  },
+  {
+    "site": "xiaohongshu",
     "name": "login",
     "description": "Open xiaohongshu login and wait until the browser session is authenticated",
     "access": "write",
@@ -37474,6 +37852,33 @@
     "type": "js",
     "modulePath": "xiaohongshu/search.js",
     "sourceFile": "xiaohongshu/search.js",
+    "navigateBefore": false
+  },
+  {
+    "site": "xiaohongshu",
+    "name": "unfollow",
+    "description": "取消关注小红书用户 (profile UI automation)",
+    "access": "write",
+    "domain": "www.xiaohongshu.com",
+    "strategy": "cookie",
+    "browser": true,
+    "args": [
+      {
+        "name": "user-id",
+        "type": "str",
+        "required": true,
+        "positional": true,
+        "help": "User ID (e.g. 5d8f88dc0000000001005d3a) or profile URL"
+      }
+    ],
+    "columns": [
+      "status",
+      "user_id",
+      "url"
+    ],
+    "type": "js",
+    "modulePath": "xiaohongshu/unfollow.js",
+    "sourceFile": "xiaohongshu/unfollow.js",
     "navigateBefore": false
   },
   {
